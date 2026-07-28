@@ -15,9 +15,11 @@ Default instructor PIN: foundry  (change it in Director → Round Control).
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 import db
 import content
+import logic
 import branding
 import views_student as vs
 import views_instructor as vi
@@ -26,6 +28,21 @@ st.set_page_config(page_title="Venture Foundry — The Evidence Economy",
                    page_icon="🏭", layout="wide")
 
 db.init_db()
+logic.maybe_auto_advance()   # date/time-based round advance, applied on load
+
+
+def _scroll_top_on_change(state_key, page):
+    """Scroll the main pane to the top whenever the selected page changes."""
+    if st.session_state.get(state_key) != page:
+        st.session_state[state_key] = page
+        components.html(
+            "<script>var d=window.parent.document;"
+            "['section.main','[data-testid=\"stMain\"]',"
+            "'[data-testid=\"stAppViewContainer\"]'].forEach(function(s){"
+            "var e=d.querySelector(s); if(e){e.scrollTo(0,0);}});"
+            "window.parent.scrollTo(0,0);</script>",
+            height=0,
+        )
 
 # --------------------------------------------------------------------------- #
 # Session state
@@ -108,13 +125,13 @@ STUDENT_PAGES = {
 
 
 def _student_page_label(page):
-    """Annotate a page with the week it's introduced; lock icon if not yet reached."""
-    wk = content.PAGE_UNLOCK_WEEK.get(page)
-    if not wk:
+    """Annotate a page with the round it's introduced; lock icon if not yet reached."""
+    wk = logic.page_unlock_round(page)
+    if not wk or wk <= 1:
         return page
     if db.current_round() < wk:
-        return f"🔒 {page} · wk {wk}"
-    return f"{page} · wk {wk}"
+        return f"🔒 {page} · R{wk}"
+    return f"{page} · R{wk}"
 
 
 def student_shell():
@@ -131,12 +148,13 @@ def student_shell():
         st.metric("Credits", f"{team['evidence_credits']:.1f}")
         page = st.radio("Go to", list(STUDENT_PAGES.keys()),
                         format_func=_student_page_label)
-        st.caption("🔒 = tool is introduced in a later week (still explorable).")
+        st.caption("🔒 = tool is introduced in a later round (still explorable).")
         with st.expander("Rotating team roles"):
             for role, desc in content.TEAM_ROLES:
                 st.caption(f"**{role}** — {desc}")
         st.button("Log out", on_click=logout)
 
+    _scroll_top_on_change("_student_page", page)
     STUDENT_PAGES[page](team)
 
 
@@ -146,6 +164,7 @@ def student_shell():
 INSTRUCTOR_PAGES = {
     "Cohort Overview": vi.overview,
     "Team Setup": vi.team_setup,
+    "Schedule & Timing": vi.schedule,
     "Round Control": vi.round_control,
     "Resources": vi.resources,
     "Market Events": vi.events,
@@ -160,7 +179,7 @@ def instructor_shell():
         branding.sidebar_logo()
         st.header("🎩 Venture Foundry Director")
         diff = db.get_setting("difficulty", "not set")
-        st.caption(f"Round {db.current_round()} · Difficulty: {diff}")
+        st.caption(f"Round {db.current_round()} of {logic.total_rounds()} · Difficulty: {diff}")
         page = st.radio("Console", list(INSTRUCTOR_PAGES.keys()))
         with st.expander("Director's questions"):
             for q in [
@@ -174,6 +193,7 @@ def instructor_shell():
                 st.caption(f"• {q}")
         st.button("Log out", on_click=logout)
 
+    _scroll_top_on_change("_instructor_page", page)
     INSTRUCTOR_PAGES[page]()
 
 

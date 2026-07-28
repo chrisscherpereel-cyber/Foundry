@@ -351,13 +351,31 @@ PIVOT_DECISIONS = [
 ]
 
 # --------------------------------------------------------------------------- #
-# Weekly curriculum — the simulation builds in complexity as new concepts are
-# introduced. Each week: concepts taught in the FIRST class session, then the
-# SECOND session is the simulation round applying them. Objectives frame what
-# students should be able to do; `tool` names the app page that becomes central.
+# Curriculum topics — the simulation builds in complexity as new concepts are
+# introduced. Each topic: concepts taught in the FIRST class session, then the
+# SECOND session is the simulation round applying them.
+#
+# Topics are an ORDERED LIST (not tied to fixed week numbers) so the Director can
+# reorder them, change how many rounds the simulation runs, and schedule when each
+# round advances. Each topic declares:
+#   key         — stable identifier
+#   introduces  — student tools first unlocked when this topic is reached
+#   canvas      — which canvas is the focus this round (customer_profile/vpc/bmc/None)
+#
+# The three canvases are deliberately STAGED across several rounds so no single
+# round is overloaded:
+#   • Customer Profile — introduced at "Customer discovery", refined at "Customer evidence"
+#   • Value Proposition Canvas — introduced at "Value creation", refined at "Value proposition fit"
+#   • Business Model Canvas — introduced at "Business-model architecture", revised at Pivot & Scaling
 # --------------------------------------------------------------------------- #
-WEEKLY_CURRICULUM = {
-    1: {
+
+# Tools available from the very first round regardless of topic order.
+BASE_TOOLS = ["Round Briefing", "Dashboard", "Founder & Opportunity",
+              "AI Assist Log", "Decision Journal"]
+
+CURRICULUM_TOPICS = [
+    {
+        "key": "founder_formation",
         "title": "Founder formation",
         "concepts": ["Entrepreneurial opportunity vs. idea", "Founder means & constraints",
                      "Effectuation: bird-in-hand"],
@@ -366,42 +384,43 @@ WEEKLY_CURRICULUM = {
                         "Frame decisions as constrained by money, time, and capability."],
         "class_focus": "What an entrepreneurial opportunity is, and why means come before ideas.",
         "sim_task": "Review your founder card and territory; set up your team.",
-        "tool": "Founder & Opportunity",
+        "tool": "Founder & Opportunity", "introduces": ["Founder & Opportunity"], "canvas": None,
     },
-    2: {
+    {
+        "key": "opportunity_framing",
         "title": "Opportunity framing",
-        "concepts": ["Opportunity portfolio", "Customer segment hypotheses",
-                     "Opportunity scoring"],
+        "concepts": ["Opportunity portfolio", "Customer segment hypotheses", "Opportunity scoring"],
         "objectives": ["Generate at least three candidate ventures inside your territory.",
                         "Score options on importance, fit, access, evidence, and affordability.",
                         "Choose deliberately rather than committing to the first idea."],
         "class_focus": "Comparing multiple opportunities before committing.",
         "sim_task": "Add and score 3+ candidate ventures on the Founder & Opportunity page.",
-        "tool": "Founder & Opportunity",
+        "tool": "Founder & Opportunity", "introduces": [], "canvas": None,
     },
-    3: {
+    {
+        "key": "customer_discovery",
         "title": "Customer discovery",
-        "concepts": ["Customer jobs, pains, gains", "Problem interviews",
-                     "Behavior vs. opinion"],
+        "concepts": ["Customer jobs, pains, gains", "Problem interviews", "Behavior vs. opinion"],
         "objectives": ["Build a first Customer Profile (jobs/pains/gains).",
                         "Run problem interviews that surface behavior, not opinions.",
                         "Log interview evidence on the ladder."],
         "class_focus": "The customer side of the Value Proposition Canvas; interview technique.",
         "sim_task": "Create Customer Profile v1; log interview evidence.",
-        "tool": "Canvases",
+        "tool": "Canvases", "introduces": ["Canvases", "Evidence Ledger"], "canvas": "customer_profile",
     },
-    4: {
+    {
+        "key": "customer_evidence",
         "title": "Customer evidence",
-        "concepts": ["Evidence quality & strength", "Pattern vs. contradiction",
-                     "Unsupported beliefs"],
+        "concepts": ["Evidence quality & strength", "Pattern vs. contradiction", "Unsupported beliefs"],
         "objectives": ["Separate strong behavioral evidence from weak opinion.",
                         "Revise the Customer Profile from real findings.",
                         "Flag beliefs you still cannot support."],
         "class_focus": "What counts as credible customer evidence.",
         "sim_task": "Save Customer Profile v2 driven by evidence; grow the Evidence Ledger.",
-        "tool": "Evidence Ledger",
+        "tool": "Evidence Ledger", "introduces": [], "canvas": "customer_profile",
     },
-    5: {
+    {
+        "key": "value_creation",
         "title": "Value creation",
         "concepts": ["Products & services", "Pain relievers", "Gain creators"],
         "objectives": ["Draft the value-map side of the VPC.",
@@ -409,31 +428,32 @@ WEEKLY_CURRICULUM = {
                         "Tie each reliever/creator to a specific pain/gain."],
         "class_focus": "The value-map side of the Value Proposition Canvas.",
         "sim_task": "Build VPC v1 and add 3+ propositions to the VP Auction.",
-        "tool": "Canvases",
+        "tool": "Canvases", "introduces": ["VP Auction"], "canvas": "vpc",
     },
-    6: {
+    {
+        "key": "value_prop_fit",
         "title": "Value proposition fit",
-        "concepts": ["Problem–solution fit", "Prioritization",
-                     "Confidence vs. evidence"],
+        "concepts": ["Problem–solution fit", "Prioritization", "Confidence vs. evidence"],
         "objectives": ["Assess fit between value map and customer profile.",
                         "Allocate Venture Tokens to reveal confidence.",
                         "Redirect toward evidence to avoid the overconfidence tax."],
         "class_focus": "Judging fit and prioritizing the most important elements.",
         "sim_task": "Run a VP Auction round; record a fit assessment.",
-        "tool": "VP Auction",
+        "tool": "VP Auction", "introduces": [], "canvas": "vpc",
     },
-    7: {
+    {
+        "key": "bmc_architecture",
         "title": "Business-model architecture",
-        "concepts": ["Nine BMC blocks", "Block interdependence",
-                     "Value capture"],
+        "concepts": ["Nine BMC blocks", "Block interdependence", "Value capture"],
         "objectives": ["Construct a complete Business Model Canvas.",
                         "Trace dependencies between blocks.",
                         "Respond coherently to a market event that breaks one block."],
         "class_focus": "The nine blocks of the Business Model Canvas and how they connect.",
         "sim_task": "Build BMC v1; respond to your first market event.",
-        "tool": "Canvases",
+        "tool": "Canvases", "introduces": ["Market Events"], "canvas": "bmc",
     },
-    8: {
+    {
+        "key": "assumption_testing",
         "title": "Assumption testing",
         "concepts": ["Desirability, feasibility, viability, adaptability",
                      "Assumption mapping", "Importance × evidence"],
@@ -442,9 +462,10 @@ WEEKLY_CURRICULUM = {
                         "Decide what to test and what to defer, with consequences."],
         "class_focus": "The four risk types and prioritizing what to test.",
         "sim_task": "Build the Assumption Map; mark the riskiest untested beliefs.",
-        "tool": "Assumption Map",
+        "tool": "Assumption Map", "introduces": ["Assumption Map"], "canvas": None,
     },
-    9: {
+    {
+        "key": "experiment_design",
         "title": "Experiment design",
         "concepts": ["Hypotheses & metrics", "Success/failure thresholds",
                      "Decision rules", "Experiment cost"],
@@ -453,31 +474,32 @@ WEEKLY_CURRICULUM = {
                         "Spend limited resources on the highest-learning tests."],
         "class_focus": "Turning assumptions into falsifiable experiments.",
         "sim_task": "Purchase and design experiment cards for your top assumptions.",
-        "tool": "Experiment Marketplace",
+        "tool": "Experiment Marketplace", "introduces": ["Experiment Marketplace"], "canvas": None,
     },
-    10: {
+    {
+        "key": "market_testing",
         "title": "Market testing",
-        "concepts": ["Minimum viable experiments", "Evidence strength",
-                     "Learning per dollar"],
+        "concepts": ["Minimum viable experiments", "Evidence strength", "Learning per dollar"],
         "objectives": ["Execute experiments and record honest results.",
                         "Update assumptions to Supported/Refuted.",
                         "Measure learning efficiency."],
         "class_focus": "Running MVEs and interpreting evidence.",
         "sim_task": "Record experiment results; log resulting evidence.",
-        "tool": "Experiment Marketplace",
+        "tool": "Experiment Marketplace", "introduces": [], "canvas": None,
     },
-    11: {
+    {
+        "key": "pivot_decisions",
         "title": "Pivot decisions",
-        "concepts": ["Pivot, persevere, or stop", "Evidence-based change",
-                     "Sunk-cost discipline"],
+        "concepts": ["Pivot, persevere, or stop", "Evidence-based change", "Sunk-cost discipline"],
         "objectives": ["Decide whether contradictory evidence warrants a pivot.",
                         "File a disciplined pivot petition.",
                         "Rebuild the canvas while keeping it coherent (BMC v2)."],
         "class_focus": "What makes a pivot disciplined rather than random.",
         "sim_task": "Submit a Pivot Petition; save BMC v2 if approved.",
-        "tool": "Pivot Petition",
+        "tool": "Pivot Petition", "introduces": ["Pivot Petition"], "canvas": "bmc",
     },
-    12: {
+    {
+        "key": "business_economics",
         "title": "Business economics",
         "concepts": ["Revenue & cost structure", "Pricing", "Unit economics", "Contribution margin"],
         "objectives": ["Test pricing and willingness to pay.",
@@ -485,9 +507,10 @@ WEEKLY_CURRICULUM = {
                         "Judge whether the model can be viable."],
         "class_focus": "Revenue, costs, pricing, channels, and unit economics.",
         "sim_task": "Run a pricing test; capture an economic viability model in the BMC.",
-        "tool": "Experiment Marketplace",
+        "tool": "Experiment Marketplace", "introduces": [], "canvas": "bmc",
     },
-    13: {
+    {
+        "key": "scaling",
         "title": "Scaling and competition",
         "concepts": ["Channels & partners", "Key resources/activities", "Defensibility"],
         "objectives": ["Respond to competitor moves and capacity limits.",
@@ -495,9 +518,10 @@ WEEKLY_CURRICULUM = {
                         "Articulate why the model is defensible."],
         "class_focus": "Scaling the model and defending it against competition.",
         "sim_task": "Update the BMC into a scaling plan; handle competitive events.",
-        "tool": "Canvases",
+        "tool": "Canvases", "introduces": [], "canvas": "bmc",
     },
-    14: {
+    {
+        "key": "investment_readiness",
         "title": "Investment readiness",
         "concepts": ["Evidence narrative", "Business-model coherence", "Due diligence"],
         "objectives": ["Assemble a coherent evidence narrative.",
@@ -505,9 +529,10 @@ WEEKLY_CURRICULUM = {
                         "Draft an investment memorandum."],
         "class_focus": "Building an evidence-based investment case.",
         "sim_task": "Prepare your investment memo; stress-test coherence.",
-        "tool": "Dashboard",
+        "tool": "Dashboard", "introduces": [], "canvas": None,
     },
-    15: {
+    {
+        "key": "venture_market",
         "title": "Venture market (Evidence Exchange)",
         "concepts": ["Business-model defense", "Remaining uncertainty", "Next experiment"],
         "objectives": ["Defend the model with evidence, not advocacy.",
@@ -515,26 +540,14 @@ WEEKLY_CURRICULUM = {
                         "Propose the next most valuable experiment."],
         "class_focus": "The final defense: what you know, how you know it, what's next.",
         "sim_task": "Assemble the final evidence portfolio; present at the Evidence Exchange.",
-        "tool": "Dashboard",
+        "tool": "Dashboard", "introduces": [], "canvas": None,
     },
-}
+]
 
-# Which week each student tool is INTRODUCED. Tools remain usable earlier, but the
-# app flags early access so complexity is added deliberately, week by week.
-PAGE_UNLOCK_WEEK = {
-    "Round Briefing": 1,
-    "Founder & Opportunity": 1,
-    "AI Assist Log": 1,
-    "Decision Journal": 1,
-    "Canvases": 3,
-    "Evidence Ledger": 3,
-    "VP Auction": 5,
-    "Market Events": 7,
-    "Assumption Map": 8,
-    "Experiment Marketplace": 9,
-    "Pivot Petition": 11,
-    "Dashboard": 1,
-}
+CURRICULUM_BY_KEY = {t["key"]: t for t in CURRICULUM_TOPICS}
+DEFAULT_TOPIC_ORDER = [t["key"] for t in CURRICULUM_TOPICS]
+DEFAULT_TOTAL_ROUNDS = len(CURRICULUM_TOPICS)
+CANVAS_TYPES = ["customer_profile", "vpc", "bmc"]
 
 # --------------------------------------------------------------------------- #
 # Generative-AI assist + verification methodology

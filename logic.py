@@ -1,11 +1,147 @@
 """
-logic.py — Shared game logic: valuation, evidence economy, dashboard aggregation.
+logic.py — Shared game logic: valuation, evidence economy, dashboard aggregation,
+and the editable schedule (round -> topic -> advance time).
 
 Kept free of Streamlit so it can be unit-tested and reused.
 """
 
+from datetime import datetime, timezone
+
 import db
 import content
+
+
+# --------------------------------------------------------------------------- #
+# Schedule: number of rounds, topic per round, advance datetimes, auto-advance
+# --------------------------------------------------------------------------- #
+def total_rounds():
+    try:
+        return int(db.get_setting("total_rounds", content.DEFAULT_TOTAL_ROUNDS))
+    except (TypeError, ValueError):
+        return content.DEFAULT_TOTAL_ROUNDS
+
+
+def get_schedule():
+    """Return the ordered schedule with the resolved topic dict for each round."""
+    rows = {r["round"]: r for r in db.get_schedule_rows()}
+    out = []
+    n = total_rounds()
+    for rnd in range(1, n + 1):
+        row = rows.get(rnd)
+        key = row["topic_key"] if row else None
+        topic = content.CURRICULUM_BY_KEY.get(key)
+        out.append({
+            "round": rnd,
+            "topic_key": key,
+            "topic": topic,
+            "advance_at": row["advance_at"] if row else None,
+        })
+    return out
+
+
+def set_total_rounds(n):
+    """Change how many rounds the simulation runs, keeping existing assignments.
+
+    Growing adds new rounds seeded with the next default topics (cycling if needed);
+    shrinking drops the extra rounds. Never lets current_round exceed the new max.
+    """
+    n = max(1, int(n))
+    existing = {r["round"]: r for r in db.get_schedule_rows()}
+    for rnd in range(1, n + 1):
+        if rnd not in existing:
+            default_key = content.DEFAULT_TOPIC_ORDER[(rnd - 1) % len(content.DEFAULT_TOPIC_ORDER)]
+            db.upsert_schedule_row(rnd, default_key, None)
+    db.delete_schedule_rows_above(n)
+    db.set_setting("total_rounds", n)
+    if db.current_round() > n:
+        db.set_setting("current_round", n)
+
+
+def topic_for_round(rnd):
+    """The curriculum topic scheduled for a given round (dict) or None."""
+    for row in get_schedule():
+        if row["round"] == rnd:
+            return row["topic"]
+    return None
+
+
+def newly_unlocked(rnd):
+    """Student tools first introduced at this round, per the current schedule."""
+    topic = topic_for_round(rnd)
+    intro = list(topic.get("introduces", [])) if topic else []
+    # Round 1 also formally "introduces" the always-available base tools.
+    if rnd == 1:
+        intro = content.BASE_TOOLS + [p for p in intro if p not in content.BASE_TOOLS]
+    return intro
+
+
+def page_unlock_round(page):
+    """Earliest round that introduces a page (1 for base tools / unscheduled)."""
+    if page in content.BASE_TOOLS:
+        return 1
+    for row in get_schedule():
+        topic = row["topic"]
+        if topic and page in topic.get("introduces", []):
+            return row["round"]
+    return 1  # never explicitly scheduled => always available
+
+
+def canvas_unlock_round(canvas_type):
+    """Earliest round whose topic focuses on a given canvas type."""
+    for row in get_schedule():
+        topic = row["topic"]
+        if topic and topic.get("canvas") == canvas_type:
+            return row["round"]
+    return 1
+
+
+def canvas_focus_for_round(rnd):
+    topic = topic_for_round(rnd)
+    return topic.get("canvas") if topic else None
+
+
+def _parse_dt(text):
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def maybe_auto_advance():
+    """Advance the current round if a scheduled advance time has passed.
+
+    The app has no background scheduler, so this runs on page load: current_round
+    becomes the highest round whose advance_at is in the past (never going backward,
+    never exceeding total_rounds). Returns the (possibly unchanged) current round.
+    """
+    now = datetime.now(timezone.utc)
+    cur = db.current_round()
+    target = cur
+    for row in get_schedule():
+        dt = _parse_dt(row["advance_at"])
+        if dt is not None:
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            if dt <= now and row["round"] > target:
+                target = row["round"]
+    if target != cur:
+        db.set_setting("current_round", target)
+    return target
+
+
+def next_scheduled_advance():
+    """Return (round, datetime_text) for the next future advance, or None."""
+    now = datetime.now(timezone.utc)
+    for row in get_schedule():
+        dt = _parse_dt(row["advance_at"])
+        if dt is not None:
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            if dt > now:
+                return row["round"], row["advance_at"]
+    return None
 
 
 # --------------------------------------------------------------------------- #

@@ -7,6 +7,7 @@ whole simulation without a separate manual.
 """
 
 import random
+from datetime import datetime, date, time
 
 import streamlit as st
 
@@ -15,7 +16,7 @@ import content
 import logic
 
 
-def _guide(what, steps=None, terms=None, expanded=True):
+def _guide(what, steps=None, terms=None, expanded=False):
     """Plain-language 'How this page works' panel (see student views for details)."""
     with st.expander("ℹ️ How this page works", expanded=expanded):
         st.markdown(what)
@@ -25,6 +26,90 @@ def _guide(what, steps=None, terms=None, expanded=True):
         if terms:
             st.markdown("**Key terms**")
             st.markdown("\n".join(f"- **{t}** — {d}" for t, d in terms))
+
+
+# --------------------------------------------------------------------------- #
+# Schedule & timing — number of rounds, topic order, advance date/times
+# --------------------------------------------------------------------------- #
+def schedule():
+    st.subheader("🗓️ Schedule & Timing")
+    _guide(
+        "Design the whole run here. Set how many rounds the simulation lasts, reorder the "
+        "topics however you like, and optionally schedule a date/time for each round to begin. "
+        "Because there's no always-on server, a scheduled advance is applied the next time the "
+        "app is opened after that time — so the cohort auto-advances when students or you load "
+        "it. Leave a round's time blank to advance it manually from Round Control.",
+        steps=[
+            "Set the number of rounds and click Apply — topics fill in automatically.",
+            "For each round, pick the topic (this is how you move topics around).",
+            "Optionally set an advance date and time for a round.",
+            "Save each row. The current schedule shows at the bottom.",
+        ],
+        terms=[
+            ("Round", "One simulation session. Was 15 by default; change it to any number."),
+            ("Topic", "The curriculum unit taught that round — reorder freely."),
+            ("Advance at", "When the sim moves TO that round. Applied on next app load after "
+             "the time passes."),
+        ],
+    )
+
+    total = logic.total_rounds()
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        new_total = st.number_input(
+            "Number of rounds", 1, 40, total,
+            help="How many rounds (weeks) the simulation runs. The default is 15. Growing adds "
+                 "rounds with default topics; shrinking drops the last rounds.")
+        if st.button("Apply number of rounds"):
+            logic.set_total_rounds(int(new_total))
+            st.success(f"Schedule now has {int(new_total)} rounds.")
+            st.rerun()
+    with c2:
+        nxt = logic.next_scheduled_advance()
+        st.caption(f"Current round: **{db.current_round()}** of {total}.")
+        if nxt:
+            st.caption(f"⏱️ Next auto-advance: Round {nxt[0]} at {nxt[1]}.")
+        else:
+            st.caption("No future auto-advance scheduled — rounds advance manually.")
+
+    st.divider()
+    st.write("### Rounds")
+    topic_keys = content.DEFAULT_TOPIC_ORDER
+    for row in logic.get_schedule():
+        rnd = row["round"]
+        title = row["topic"]["title"] if row["topic"] else "—"
+        with st.expander(f"Round {rnd} — {title}"):
+            tk = st.selectbox(
+                "Topic", topic_keys,
+                index=topic_keys.index(row["topic_key"]) if row["topic_key"] in topic_keys else 0,
+                format_func=lambda k: content.CURRICULUM_BY_KEY[k]["title"],
+                key=f"sch_topic_{rnd}",
+                help="Which curriculum topic this round teaches. Change it to reorder topics.")
+            cur_dt = logic._parse_dt(row["advance_at"])
+            set_time = st.checkbox("Schedule an advance date/time", value=cur_dt is not None,
+                                   key=f"sch_chk_{rnd}",
+                                   help="Tick to auto-advance TO this round at a set time.")
+            d = st.date_input("Advance date", value=(cur_dt.date() if cur_dt else date.today()),
+                              key=f"sch_date_{rnd}") if set_time else None
+            t = st.time_input("Advance time", value=(cur_dt.time() if cur_dt else time(9, 0)),
+                              key=f"sch_time_{rnd}") if set_time else None
+            if st.button("Save round", key=f"sch_save_{rnd}"):
+                db.set_schedule_topic(rnd, tk)
+                if set_time and d is not None and t is not None:
+                    db.set_schedule_advance(rnd, datetime.combine(d, t).isoformat(timespec="minutes"))
+                else:
+                    db.set_schedule_advance(rnd, None)
+                st.success(f"Round {rnd} saved.")
+                st.rerun()
+
+    st.divider()
+    if st.button("↩️ Reset to default 15-round order"):
+        logic.set_total_rounds(content.DEFAULT_TOTAL_ROUNDS)
+        for i, key in enumerate(content.DEFAULT_TOPIC_ORDER):
+            db.set_schedule_topic(i + 1, key)
+            db.set_schedule_advance(i + 1, None)
+        st.success("Schedule reset to the default order.")
+        st.rerun()
 
 
 # --------------------------------------------------------------------------- #
@@ -48,16 +133,22 @@ def round_control():
         ],
     )
     cur = db.current_round()
+    total = logic.total_rounds()
     c1, c2 = st.columns([1, 3])
     with c1:
         new_round = st.number_input(
-            "Current round", 1, 15, cur,
-            help="The class week the whole cohort is on. Tagged onto new events, scores, and "
-                 "reflections.")
+            "Current round", 1, total, min(cur, total),
+            help="The round the whole cohort is on. Tagged onto new events, scores, and "
+                 "reflections. Change the number of rounds and topic order on the "
+                 "Schedule & Timing page.")
         if st.button("Set round", help="Apply the round number to the whole cohort."):
             db.set_setting("current_round", int(new_round))
             st.success(f"Round set to {new_round}.")
             st.rerun()
+    nxt = logic.next_scheduled_advance()
+    if nxt:
+        st.caption(f"⏱️ Next scheduled auto-advance: Round {nxt[0]} at {nxt[1]} "
+                   "(applies when the app is next opened after that time).")
     with c2:
         pin = st.text_input(
             "Instructor PIN (change)", value=db.get_setting("instructor_pin", "foundry"),
@@ -68,11 +159,11 @@ def round_control():
             st.success("PIN updated.")
 
     st.divider()
-    wk = content.WEEKLY_CURRICULUM.get(cur)
+    wk = logic.topic_for_round(cur)
     if wk:
-        st.write(f"### This week's plan — Week {cur}: {wk['title']}")
+        st.write(f"### This round's plan — Round {cur}: {wk['title']}")
         st.caption("Teach the concepts in the first session; the second session is the "
-                   "simulation round. Complexity builds week over week.")
+                   "simulation round. Complexity builds round over round.")
         st.info(f"**In class:** {wk['class_focus']}\n\n"
                 f"**Simulation task:** {wk['sim_task']}  ·  **Tool:** {wk['tool']}")
         cc1, cc2 = st.columns(2)
@@ -84,20 +175,20 @@ def round_control():
             st.markdown("**Concepts introduced**")
             for c in wk["concepts"]:
                 st.markdown(f"- {c}")
-        newly = [p for p, w in content.PAGE_UNLOCK_WEEK.items() if w == cur]
+        newly = [p for p in logic.newly_unlocked(cur) if p not in content.BASE_TOOLS]
         if newly:
-            st.success("🔓 Tools introduced to students this week: " + ", ".join(newly))
+            st.success("🔓 Tools introduced to students this round: " + ", ".join(newly))
 
     st.divider()
-    st.write("### 15-week semester map")
-    st.caption("Your week-by-week run-of-show. The highlighted row is the current round.")
-    row = next((s for s in content.SEMESTER if s[0] == cur), None)
-    if row:
-        st.info(f"**Week {row[0]} — {row[1]}**  ·  Strategyzer: {row[2]}  ·  "
-                f"Evidence produced: {row[3]}")
+    st.write(f"### {total}-round map")
+    st.caption("The current schedule. Reorder topics, change the number of rounds, and set "
+               "advance times on the **Schedule & Timing** page.")
     st.dataframe(
-        [{"Week": w, "Venture stage": stage, "Strategyzer concepts": concept,
-          "Evidence produced": ev} for w, stage, concept, ev in content.SEMESTER],
+        [{"Round": row["round"],
+          "Topic": row["topic"]["title"] if row["topic"] else "—",
+          "Concepts": ", ".join(row["topic"]["concepts"]) if row["topic"] else "",
+          "Advance at": row["advance_at"] or "—"}
+         for row in logic.get_schedule()],
         use_container_width=True, hide_index=True,
     )
 
@@ -352,7 +443,7 @@ def events():
             "Target", ["All teams (broadcast)"] + [t["name"] for t in teams],
             help="Send to one team, or broadcast to the whole cohort.")
         rnd = st.number_input(
-            "Round", 1, 15, db.current_round(),
+            "Round", 1, logic.total_rounds(), db.current_round(),
             help="Which round this event belongs to. Defaults to the current round.")
         if st.form_submit_button("Issue event",
                                  help="Send this event to the chosen target."):
@@ -472,7 +563,7 @@ def scoring():
 
     with st.form("score_form"):
         rnd = st.number_input(
-            "Round", 1, 15, db.current_round(),
+            "Round", 1, logic.total_rounds(), db.current_round(),
             help="Which round these scores are for. Scores are kept per round.")
         new_scores = {}
         for name, meaning in content.DASHBOARD_DIMENSIONS:

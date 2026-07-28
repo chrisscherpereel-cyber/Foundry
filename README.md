@@ -24,7 +24,8 @@ first run and holds all cohort state (survives restarts).
 - **Team Setup** — two ways to create teams:
   - **⚡ Quick balanced setup** — enter a number of teams and pick a **difficulty level (Novice → Easy → Standard → Hard → Expert)**. Every team is created with *identical* starting capital, Evidence Credits, founder-hours, and market potential, so all teams have an equal opportunity for success. Choose whether territories are **distinct per team** (teams avoid competing for identical customers) or **the same for all** (maximum comparability), and whether founders are a **shared balanced card** or **varied archetypes** (resources are equalized either way). Join codes are listed for handout.
   - **Manual add** — create one team at a time with fully custom territory, founder card, and resources.
-- **Round Control** — advance the 15-week semester; view the week-by-week map.
+- **Schedule & Timing** — define **how many rounds** the simulation runs (default 15), **reorder the topics** into any sequence, and optionally set a **date/time** for each round to begin. Because there's no always-on server, a scheduled advance is applied the next time the app is opened after that time (so the cohort auto-advances on load). Includes a one-click reset to the default order.
+- **Round Control** — set the current round manually; see this round's objectives/concepts/task and the full schedule map.
 - **Resources** — grant or deduct capital, credits, and hours (funding rounds, penalties).
 - **Market Events** — issue events by category (Customer, Competitive, Operational, Regulatory & Ethical, Financial). Each event names the assumption it exposes. Broadcast to all teams, target one team, or roll a random event.
 - **VP Auction** — inspect each team's value propositions and token allocations; override a proposition's evidence support to match the real evidence quality (which drives the automated tax/dividend).
@@ -34,10 +35,10 @@ first run and holds all cohort state (survives restarts).
 
 **🎓 Team (student)** — enter with the join code:
 
-- **Round Briefing** — the starting point each week: this round's learning objectives, the concepts introduced in class, the specific simulation task, which tool to use, and what's newly unlocked. Includes the full 15-week arc so students see how complexity builds.
+- **Round Briefing** — the starting point each round: this round's learning objectives, the concepts introduced in class, the specific simulation task, which tool to use, and what's newly unlocked. Includes the full round-by-round arc so students see how complexity builds.
 - **Dashboard** — resources, live venture valuation, performance dimensions, and a warning list of high-importance untested assumptions.
 - **Founder & Opportunity** — your founder card and territory; log ≥3 candidate ventures scored on importance, fit, access, evidence availability, affordability.
-- **Canvases** — the real Strategyzer canvases in their canonical layouts: **Customer Profile** (the circle — gains / jobs / pains), the **Value Proposition Canvas** (value-map square beside the customer-profile circle, so the "fit" is visible), and the **Business Model Canvas** (the nine blocks in their standard grid positions). All versioned with dated change notes and full history.
+- **Canvases** — the real Strategyzer canvases in their canonical layouts: **Customer Profile** (the circle — gains / jobs / pains), the **Value Proposition Canvas** (value-map square beside the customer-profile circle, so the "fit" is visible), and the **Business Model Canvas** (the nine blocks in their standard grid positions). All versioned with dated change notes and full history. The three canvases are **staged across several rounds** (Customer Profile → VPC → BMC) so no single round is overloaded; the page shows the current round's focus canvas and flags any introduced later.
 - **VP Auction** — field ≥3 competing value propositions, then privately allocate 100 Venture Tokens. The round scores automatically: an **Overconfidence Tax** hits tokens parked on weakly-supported propositions, and a **Learning Dividend** rewards redirecting tokens toward better-supported ones vs. your last auction. Net Evidence Credits are applied on submit; a live preview shows the outcome before you commit.
 - **Assumption Map** — convert the venture into testable assumptions, classify by risk type (desirability / feasibility / viability / adaptability), importance, existing evidence, testability; auto-computed priority.
 - **Experiment Marketplace** — buy experiment cards with limited money / hours / credits; you must state hypothesis, metric, success + failure thresholds, and decision rule *before* recording results.
@@ -47,17 +48,20 @@ first run and holds all cohort state (survives restarts).
 - **AI Assist Log** — where teams record every use of generative AI and verify it (see below).
 - **Decision Journal** — individual weekly reflections for accountability.
 
-## Weekly curriculum & progressive complexity
+## Curriculum, progressive complexity & scheduling
 
-The simulation is built to add complexity one week at a time. Each of the 15
-weeks has defined **learning objectives** and **concepts** (taught in the first
-class session), with the second session being the simulation round that applies
-them. `content.py` holds the full `WEEKLY_CURRICULUM`, and `PAGE_UNLOCK_WEEK`
-records when each tool is formally introduced:
+The simulation adds complexity one round at a time. Each round has defined
+**learning objectives** and **concepts** (taught in the first class session), with
+the second session being the simulation round that applies them. `content.py` holds
+the ordered `CURRICULUM_TOPICS`; the **schedule** (a SQLite table) maps each round
+to a topic and an optional advance time, and tool unlocks are derived from wherever
+each topic sits in that schedule — so everything follows your reordering automatically.
 
-- The student **Round Briefing** and the Director's **Round Control** both surface the current week's objectives, concepts, task, and newly unlocked tools.
-- In the student sidebar each tool is labelled with the week it's introduced; tools reached in a later week show a 🔒 and a gentle "introduced in Week N" banner but remain explorable — complexity is *guided*, not hard-locked.
-- The arc runs founder/opportunity formation → customer discovery → value proposition → business model → assumptions → experiments → market testing → pivots → economics → scaling → investment defense.
+- **Configurable length** — the Director sets the number of rounds (default 15) on **Schedule & Timing**.
+- **Reorderable topics** — move any topic to any round; unlocks and the canvas staging recompute to match.
+- **Timed advancement** — set a date/time per round; the sim auto-advances to that round the next time the app is loaded after the time passes (no background server required).
+- **Guided, not hard-locked** — the student **Round Briefing** and the Director's **Round Control** surface the current round's objectives, concepts, task, and newly unlocked tools. In the student sidebar each tool is labelled with the round it's introduced; tools reached later show a 🔒 and a gentle "introduced in Round N" banner but stay explorable.
+- The default arc runs founder/opportunity formation → customer discovery → value proposition → business model → assumptions → experiments → market testing → pivots → economics → scaling → investment defense.
 
 ## Generative AI + the AUDIT verification methodology
 

@@ -234,6 +234,12 @@ CREATE TABLE IF NOT EXISTS ai_logs (
     created_at    TEXT,
     FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS schedule (
+    round      INTEGER PRIMARY KEY,   -- 1..total_rounds
+    topic_key  TEXT,                  -- references a curriculum topic key
+    advance_at TEXT                   -- ISO datetime this round should begin (optional)
+);
 """
 
 
@@ -255,6 +261,14 @@ def init_db():
         conn.commit()
     finally:
         conn.close()
+    # Seed the default schedule/total-rounds on first run (import here to avoid a
+    # circular import at module load).
+    import content
+    if get_setting("total_rounds") is None:
+        set_setting("total_rounds", content.DEFAULT_TOTAL_ROUNDS)
+    if not get_schedule_rows():
+        for i, key in enumerate(content.DEFAULT_TOPIC_ORDER):
+            upsert_schedule_row(i + 1, key, None)
 
 
 # --------------------------------------------------------------------------- #
@@ -897,6 +911,60 @@ def delete_ai_log(log_id):
     conn = get_conn()
     try:
         conn.execute("DELETE FROM ai_logs WHERE id=?", (log_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# Schedule (round -> topic -> advance datetime). Raw CRUD; higher-level seeding
+# and derived queries live in logic.py.
+# --------------------------------------------------------------------------- #
+def get_schedule_rows():
+    conn = get_conn()
+    try:
+        rows = conn.execute("SELECT * FROM schedule ORDER BY round").fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def upsert_schedule_row(round_no, topic_key, advance_at=None):
+    conn = get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO schedule(round, topic_key, advance_at) VALUES(?,?,?) "
+            "ON CONFLICT(round) DO UPDATE SET topic_key=excluded.topic_key, "
+            "advance_at=excluded.advance_at",
+            (round_no, topic_key, advance_at),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_schedule_topic(round_no, topic_key):
+    conn = get_conn()
+    try:
+        conn.execute("UPDATE schedule SET topic_key=? WHERE round=?", (topic_key, round_no))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_schedule_advance(round_no, advance_at):
+    conn = get_conn()
+    try:
+        conn.execute("UPDATE schedule SET advance_at=? WHERE round=?", (advance_at, round_no))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_schedule_rows_above(max_round):
+    conn = get_conn()
+    try:
+        conn.execute("DELETE FROM schedule WHERE round > ?", (max_round,))
         conn.commit()
     finally:
         conn.close()

@@ -16,7 +16,7 @@ import logic
 # --------------------------------------------------------------------------- #
 # Shared guidance helpers
 # --------------------------------------------------------------------------- #
-def _guide(what, steps=None, terms=None, expanded=True):
+def _guide(what, steps=None, terms=None, expanded=False):
     """Render a plain-language 'How this page works' panel.
 
     what   — one-paragraph explanation of the page's purpose.
@@ -55,13 +55,13 @@ def _refresh_team(team_id):
 
 def _unlock_notice(page_name):
     """Soft progressive-complexity banner: tools stay usable, but we flag early access."""
-    wk = content.PAGE_UNLOCK_WEEK.get(page_name)
+    wk = logic.page_unlock_round(page_name)
     cur = db.current_round()
     if wk and cur < wk:
         st.warning(
-            f"🔒 This tool is formally introduced in **Week {wk}** — its concepts are taught "
+            f"🔒 This tool is formally introduced in **Round {wk}** — its concepts are taught "
             f"then. You're in Round {cur}, so feel free to explore, but the guided sequence "
-            f"reaches it in Week {wk}.")
+            f"reaches it in Round {wk}.")
 
 
 def _ai_check_notice():
@@ -75,8 +75,8 @@ def _ai_check_notice():
 # --------------------------------------------------------------------------- #
 def round_briefing(team):
     cur = db.current_round()
-    wk = content.WEEKLY_CURRICULUM.get(cur)
-    st.subheader(f"📅 Round Briefing — Week {cur}" + (f": {wk['title']}" if wk else ""))
+    wk = logic.topic_for_round(cur)
+    st.subheader(f"📅 Round Briefing — Round {cur}" + (f": {wk['title']}" if wk else ""))
     _guide(
         "The simulation adds complexity one week at a time. In the first class session each "
         "week your instructor introduces new concepts; this round is where you apply them. "
@@ -108,20 +108,22 @@ def round_briefing(team):
     st.success(f"**🎯 This round's simulation task:** {wk['sim_task']}\n\n"
                f"**Go to:** *{wk['tool']}* in the sidebar.")
 
-    # What unlocks this week
-    newly = [p for p, w in content.PAGE_UNLOCK_WEEK.items() if w == cur]
+    # What unlocks this round (excluding base tools already available)
+    newly = [p for p in logic.newly_unlocked(cur) if p not in content.BASE_TOOLS]
     if newly:
-        st.info("🔓 **New this week:** " + ", ".join(newly))
+        st.info("🔓 **New this round:** " + ", ".join(newly))
 
     st.divider()
     st.markdown("**🤖 Generative AI this round**")
     st.markdown(content.AI_PROTOCOL_SUMMARY)
 
-    with st.expander("Full 15-week arc (how complexity builds)"):
+    with st.expander(f"Full {logic.total_rounds()}-round arc (how complexity builds)"):
         st.dataframe(
-            [{"Week": w, "Focus": d["title"],
-              "Concepts": ", ".join(d["concepts"]), "Task": d["sim_task"]}
-             for w, d in content.WEEKLY_CURRICULUM.items()],
+            [{"Round": row["round"],
+              "Focus": row["topic"]["title"] if row["topic"] else "—",
+              "Concepts": ", ".join(row["topic"]["concepts"]) if row["topic"] else "",
+              "Task": row["topic"]["sim_task"] if row["topic"] else ""}
+             for row in logic.get_schedule()],
             use_container_width=True, hide_index=True,
         )
 
@@ -435,14 +437,19 @@ def _bmc_layout(ctype, val):
 def canvases(team):
     st.subheader("🗂️ Canvases")
     _unlock_notice("Canvases")
+    cur = db.current_round()
+    cp_wk = logic.canvas_unlock_round("customer_profile")
+    vpc_wk = logic.canvas_unlock_round("vpc")
+    bmc_wk = logic.canvas_unlock_round("bmc")
     _guide(
         "These are the real Strategyzer canvases, laid out as they appear on paper. Treat every "
         "box as a **hypothesis** you'll later test, not a fact. Each time you learn something, "
         "save a NEW version with a note on what changed — the simulation grades how your "
-        "thinking evolves. Customer Profile is introduced in Week 3, the full VPC in Week 5, "
-        "and the Business Model Canvas in Week 7.",
+        "thinking evolves. The three canvases are staged so no single round is overloaded: "
+        f"Customer Profile from Round {cp_wk}, the Value Proposition Canvas from Round {vpc_wk}, "
+        f"and the Business Model Canvas from Round {bmc_wk}.",
         steps=[
-            "Pick a canvas from the dropdown (Customer Profile → VPC → BMC as the weeks progress).",
+            "Work on the canvas that's in focus this round (shown below).",
             "Fill the boxes in their canonical positions. Empty is fine early on.",
             "Add a short 'what changed / why' note, then Save to create a dated version.",
             "Return after experiments and save new versions as evidence comes in.",
@@ -456,14 +463,24 @@ def canvases(team):
     )
     _ai_check_notice()
 
+    focus = logic.canvas_focus_for_round(cur)
+    focus_name = _CANVAS_DEFS[focus][0] if focus in _CANVAS_DEFS else None
+    if focus_name:
+        st.info(f"🎯 **This round's canvas focus:** {focus_name}")
+
+    canvas_keys = list(_CANVAS_DEFS.keys())
+    default_idx = canvas_keys.index(focus) if focus in canvas_keys else 0
     ctype = st.selectbox(
-        "Canvas type",
-        list(_CANVAS_DEFS.keys()),
+        "Canvas type", canvas_keys, index=default_idx,
         format_func=lambda k: _CANVAS_DEFS[k][0],
-        help="Customer Profile (Wk 3) → Value Proposition Canvas (Wk 5) → Business Model "
-             "Canvas (Wk 7) is the guided order.",
+        help="Customer Profile → Value Proposition Canvas → Business Model Canvas is the "
+             "guided order; each is introduced a few rounds apart.",
     )
     title, blocks = _CANVAS_DEFS[ctype]
+    unlock = logic.canvas_unlock_round(ctype)
+    if cur < unlock:
+        st.warning(f"🔒 The {title} is introduced in **Round {unlock}**. You can sketch it "
+                   "early, but its concepts are taught then.")
     st.caption(_CANVAS_HELP[ctype])
 
     existing = db.list_canvases(team["id"], ctype)
@@ -1076,7 +1093,7 @@ def reflections(team):
         name = st.text_input(
             "Your name", help="Your own name — each journal entry is individual.")
         rnd = st.number_input(
-            "Round", min_value=1, max_value=15, value=db.current_round(),
+            "Round", min_value=1, max_value=logic.total_rounds(), value=db.current_round(),
             help="Which simulation round this reflection is about.")
         expected = st.text_area(
             "What did we expect?", help="Before the round, what did your team predict would happen?")
@@ -1149,7 +1166,7 @@ def ai_assist(team):
     with st.form("add_ai_log", clear_on_submit=True):
         st.markdown("**Log a new AI-assisted contribution**")
         c1, c2 = st.columns(2)
-        rnd = c1.number_input("Round", 1, 15, db.current_round(),
+        rnd = c1.number_input("Round", 1, logic.total_rounds(), db.current_round(),
                               help="Which round you used AI in.")
         tool_area = c2.selectbox("Where did you use AI?", content.AI_TOOL_AREAS,
                                  help="Which part of the venture the AI helped with.")
