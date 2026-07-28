@@ -237,8 +237,14 @@ CREATE TABLE IF NOT EXISTS ai_logs (
 
 CREATE TABLE IF NOT EXISTS schedule (
     round      INTEGER PRIMARY KEY,   -- 1..total_rounds
-    topic_key  TEXT,                  -- references a curriculum topic key
+    topic_key  TEXT,                  -- legacy single-topic column (unused; kept for compat)
     advance_at TEXT                   -- ISO datetime this round should begin (optional)
+);
+
+CREATE TABLE IF NOT EXISTS round_topics (
+    topic_key TEXT PRIMARY KEY,       -- each curriculum topic is placed in exactly one round
+    round     INTEGER,                -- which round covers this material
+    position  INTEGER                 -- order of the material within that round
 );
 """
 
@@ -267,8 +273,11 @@ def init_db():
     if get_setting("total_rounds") is None:
         set_setting("total_rounds", content.DEFAULT_TOTAL_ROUNDS)
     if not get_schedule_rows():
+        for i in range(content.DEFAULT_TOTAL_ROUNDS):
+            upsert_schedule_row(i + 1, None, None)   # advance-time rows only
+    if not get_round_topics():
         for i, key in enumerate(content.DEFAULT_TOPIC_ORDER):
-            upsert_schedule_row(i + 1, key, None)
+            set_topic_placement(key, i + 1, 0)       # one topic per round by default
 
 
 # --------------------------------------------------------------------------- #
@@ -965,6 +974,59 @@ def delete_schedule_rows_above(max_round):
     conn = get_conn()
     try:
         conn.execute("DELETE FROM schedule WHERE round > ?", (max_round,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# Round topics — many pieces of material per round (topic placed in one round)
+# --------------------------------------------------------------------------- #
+def get_round_topics():
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT topic_key, round, position FROM round_topics "
+            "ORDER BY round, position"
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def next_topic_position(round_no):
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT MAX(position) AS m FROM round_topics WHERE round=?", (round_no,)
+        ).fetchone()
+        return (row["m"] + 1) if row and row["m"] is not None else 0
+    finally:
+        conn.close()
+
+
+def set_topic_placement(topic_key, round_no, position=None):
+    """Place a topic in a round (moves it if already placed elsewhere)."""
+    if position is None:
+        position = next_topic_position(round_no)
+    conn = get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO round_topics(topic_key, round, position) VALUES(?,?,?) "
+            "ON CONFLICT(topic_key) DO UPDATE SET round=excluded.round, "
+            "position=excluded.position",
+            (topic_key, round_no, position),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def remove_round_topic(topic_key):
+    """Unassign a topic (leaves it in the unassigned pool)."""
+    conn = get_conn()
+    try:
+        conn.execute("DELETE FROM round_topics WHERE topic_key=?", (topic_key,))
         conn.commit()
     finally:
         conn.close()

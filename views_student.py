@@ -75,38 +75,41 @@ def _ai_check_notice():
 # --------------------------------------------------------------------------- #
 def round_briefing(team):
     cur = db.current_round()
-    wk = logic.topic_for_round(cur)
-    st.subheader(f"📅 Round Briefing — Round {cur}" + (f": {wk['title']}" if wk else ""))
+    topics = logic.topics_for_round(cur)
+    titles = " + ".join(t["title"] for t in topics) if topics else ""
+    st.subheader(f"📅 Round Briefing — Round {cur}" + (f": {titles}" if titles else ""))
     _guide(
-        "The simulation adds complexity one week at a time. In the first class session each "
-        "week your instructor introduces new concepts; this round is where you apply them. "
-        "Start here every week: it tells you the learning objectives, what's new, the exact "
-        "simulation task, and which tool to use. You'll also use generative AI this round — "
-        "but remember to verify what it produces (see the AI reminder below).",
+        "The simulation adds complexity round by round. In the first class session your "
+        "instructor introduces new concepts; the simulation round is where you apply them. "
+        "A single round may cover several pieces of material (your instructor decides how the "
+        "curriculum is packed into the number of rounds). Start here every round: it lists the "
+        "learning objectives, what's new, the tasks, and which tools to use. You'll also use "
+        "generative AI — remember to verify what it produces (see the AI reminder below).",
         terms=[
             ("Learning objectives", "What you should be able to DO by the end of this round."),
-            ("Concepts introduced", "New ideas taught in class this week."),
-            ("This round's task", "The specific simulation action to complete now."),
+            ("Concepts introduced", "New ideas taught in class this round."),
+            ("This round's tasks", "The specific simulation actions to complete now."),
         ],
     )
-    if not wk:
-        st.info("No briefing configured for this round.")
+    if not topics:
+        st.info("No material is assigned to this round yet — check with your instructor.")
         return
 
-    st.write(f"### 🎓 In class this week\n{wk['class_focus']}")
-
-    c1, c2 = st.columns(2)
-    with c1:
-        st.markdown("**Learning objectives**")
-        for o in wk["objectives"]:
-            st.markdown(f"- {o}")
-    with c2:
-        st.markdown("**Concepts introduced**")
-        for c in wk["concepts"]:
-            st.markdown(f"- {c}")
-
-    st.success(f"**🎯 This round's simulation task:** {wk['sim_task']}\n\n"
-               f"**Go to:** *{wk['tool']}* in the sidebar.")
+    for i, tp in enumerate(topics):
+        if i:
+            st.divider()
+        st.write(f"### 🎓 {tp['title']}")
+        st.caption(f"In class: {tp['class_focus']}")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**Learning objectives**")
+            for o in tp["objectives"]:
+                st.markdown(f"- {o}")
+        with c2:
+            st.markdown("**Concepts introduced**")
+            for c in tp["concepts"]:
+                st.markdown(f"- {c}")
+        st.success(f"**🎯 Task:** {tp['sim_task']}  ·  **Go to:** *{tp['tool']}*")
 
     # What unlocks this round (excluding base tools already available)
     newly = [p for p in logic.newly_unlocked(cur) if p not in content.BASE_TOOLS]
@@ -117,12 +120,11 @@ def round_briefing(team):
     st.markdown("**🤖 Generative AI this round**")
     st.markdown(content.AI_PROTOCOL_SUMMARY)
 
-    with st.expander(f"Full {logic.total_rounds()}-round arc (how complexity builds)"):
+    with st.expander(f"Full {logic.total_rounds()}-round plan (how complexity builds)"):
         st.dataframe(
             [{"Round": row["round"],
-              "Focus": row["topic"]["title"] if row["topic"] else "—",
-              "Concepts": ", ".join(row["topic"]["concepts"]) if row["topic"] else "",
-              "Task": row["topic"]["sim_task"] if row["topic"] else ""}
+              "Material": " + ".join(t["title"] for t in row["topics"]) or "—",
+              "Tasks": " / ".join(t["sim_task"] for t in row["topics"])}
              for row in logic.get_schedule()],
             use_container_width=True, hide_index=True,
         )
@@ -463,13 +465,13 @@ def canvases(team):
     )
     _ai_check_notice()
 
-    focus = logic.canvas_focus_for_round(cur)
-    focus_name = _CANVAS_DEFS[focus][0] if focus in _CANVAS_DEFS else None
-    if focus_name:
-        st.info(f"🎯 **This round's canvas focus:** {focus_name}")
+    focuses = logic.canvas_focus_for_round(cur)   # list (a round may cover several)
+    focus_names = [_CANVAS_DEFS[f][0] for f in focuses if f in _CANVAS_DEFS]
+    if focus_names:
+        st.info("🎯 **This round's canvas focus:** " + ", ".join(focus_names))
 
     canvas_keys = list(_CANVAS_DEFS.keys())
-    default_idx = canvas_keys.index(focus) if focus in canvas_keys else 0
+    default_idx = canvas_keys.index(focuses[0]) if focuses and focuses[0] in canvas_keys else 0
     ctype = st.selectbox(
         "Canvas type", canvas_keys, index=default_idx,
         format_func=lambda k: _CANVAS_DEFS[k][0],

@@ -22,54 +22,70 @@ def total_rounds():
 
 
 def get_schedule():
-    """Return the ordered schedule with the resolved topic dict for each round."""
-    rows = {r["round"]: r for r in db.get_schedule_rows()}
+    """Return the ordered schedule: each round with its LIST of topic dicts.
+
+    A round may cover several pieces of material, which lets a full 15-topic
+    curriculum be compressed into fewer rounds.
+    """
+    placements = db.get_round_topics()          # ordered by round, position
+    adv = {r["round"]: r["advance_at"] for r in db.get_schedule_rows()}
+    by_round = {}
+    for p in placements:
+        by_round.setdefault(p["round"], []).append(p["topic_key"])
     out = []
     n = total_rounds()
     for rnd in range(1, n + 1):
-        row = rows.get(rnd)
-        key = row["topic_key"] if row else None
-        topic = content.CURRICULUM_BY_KEY.get(key)
-        out.append({
-            "round": rnd,
-            "topic_key": key,
-            "topic": topic,
-            "advance_at": row["advance_at"] if row else None,
-        })
+        keys = by_round.get(rnd, [])
+        topics = [content.CURRICULUM_BY_KEY[k] for k in keys if k in content.CURRICULUM_BY_KEY]
+        out.append({"round": rnd, "topics": topics, "advance_at": adv.get(rnd)})
     return out
 
 
-def set_total_rounds(n):
-    """Change how many rounds the simulation runs, keeping existing assignments.
+def unassigned_topics():
+    """Curriculum topics not placed in any round within range (the 'pool')."""
+    n = total_rounds()
+    placed = {p["topic_key"] for p in db.get_round_topics() if p["round"] and p["round"] <= n}
+    return [t for t in content.CURRICULUM_TOPICS if t["key"] not in placed]
 
-    Growing adds new rounds seeded with the next default topics (cycling if needed);
-    shrinking drops the extra rounds. Never lets current_round exceed the new max.
+
+def set_total_rounds(n):
+    """Change how many rounds the simulation runs.
+
+    Growing adds empty rounds. Shrinking moves any material from removed rounds
+    onto the last remaining round, so no topic is ever lost. Never lets
+    current_round exceed the new max.
     """
     n = max(1, int(n))
-    existing = {r["round"]: r for r in db.get_schedule_rows()}
+    # Move orphaned material (round > n) onto the last round.
+    for p in db.get_round_topics():
+        if p["round"] and p["round"] > n:
+            db.set_topic_placement(p["topic_key"], n)
+    # Ensure advance-time rows exist for each round; drop extras.
+    existing = {r["round"] for r in db.get_schedule_rows()}
     for rnd in range(1, n + 1):
         if rnd not in existing:
-            default_key = content.DEFAULT_TOPIC_ORDER[(rnd - 1) % len(content.DEFAULT_TOPIC_ORDER)]
-            db.upsert_schedule_row(rnd, default_key, None)
+            db.upsert_schedule_row(rnd, None, None)
     db.delete_schedule_rows_above(n)
     db.set_setting("total_rounds", n)
     if db.current_round() > n:
         db.set_setting("current_round", n)
 
 
-def topic_for_round(rnd):
-    """The curriculum topic scheduled for a given round (dict) or None."""
+def topics_for_round(rnd):
+    """The list of curriculum topics covered in a given round."""
     for row in get_schedule():
         if row["round"] == rnd:
-            return row["topic"]
-    return None
+            return row["topics"]
+    return []
 
 
 def newly_unlocked(rnd):
-    """Student tools first introduced at this round, per the current schedule."""
-    topic = topic_for_round(rnd)
-    intro = list(topic.get("introduces", [])) if topic else []
-    # Round 1 also formally "introduces" the always-available base tools.
+    """Student tools first introduced at this round, across all its topics."""
+    intro = []
+    for topic in topics_for_round(rnd):
+        for p in topic.get("introduces", []):
+            if p not in intro:
+                intro.append(p)
     if rnd == 1:
         intro = content.BASE_TOOLS + [p for p in intro if p not in content.BASE_TOOLS]
     return intro
@@ -80,24 +96,29 @@ def page_unlock_round(page):
     if page in content.BASE_TOOLS:
         return 1
     for row in get_schedule():
-        topic = row["topic"]
-        if topic and page in topic.get("introduces", []):
-            return row["round"]
+        for topic in row["topics"]:
+            if page in topic.get("introduces", []):
+                return row["round"]
     return 1  # never explicitly scheduled => always available
 
 
 def canvas_unlock_round(canvas_type):
-    """Earliest round whose topic focuses on a given canvas type."""
+    """Earliest round whose material focuses on a given canvas type."""
     for row in get_schedule():
-        topic = row["topic"]
-        if topic and topic.get("canvas") == canvas_type:
-            return row["round"]
+        for topic in row["topics"]:
+            if topic.get("canvas") == canvas_type:
+                return row["round"]
     return 1
 
 
 def canvas_focus_for_round(rnd):
-    topic = topic_for_round(rnd)
-    return topic.get("canvas") if topic else None
+    """List of canvas types in focus this round (a round may cover several)."""
+    focuses = []
+    for topic in topics_for_round(rnd):
+        c = topic.get("canvas")
+        if c and c not in focuses:
+            focuses.append(c)
+    return focuses
 
 
 def _parse_dt(text):

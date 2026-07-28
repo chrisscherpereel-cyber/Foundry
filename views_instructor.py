@@ -34,22 +34,24 @@ def _guide(what, steps=None, terms=None, expanded=False):
 def schedule():
     st.subheader("🗓️ Schedule & Timing")
     _guide(
-        "Design the whole run here. Set how many rounds the simulation lasts, reorder the "
-        "topics however you like, and optionally schedule a date/time for each round to begin. "
-        "Because there's no always-on server, a scheduled advance is applied the next time the "
-        "app is opened after that time — so the cohort auto-advances when students or you load "
-        "it. Leave a round's time blank to advance it manually from Round Control.",
+        "Design the whole run here. Each round can cover ONE OR MORE pieces of material, so you "
+        "can fit all of the curriculum into however many rounds your class actually meets — pack "
+        "the 15 topics into 7 rounds, or spread them out, whatever fits. Add material to a round, "
+        "remove it, or move it to a different round. Any topic not placed sits in the 'Unassigned "
+        "material' pool at the bottom until you slot it in. You can also set a date/time for a "
+        "round to begin (applied the next time the app is opened after that time).",
         steps=[
-            "Set the number of rounds and click Apply — topics fill in automatically.",
-            "For each round, pick the topic (this is how you move topics around).",
-            "Optionally set an advance date and time for a round.",
-            "Save each row. The current schedule shows at the bottom.",
+            "Set the number of rounds your class will actually run, then Apply.",
+            "For each round, add material from the dropdown, or remove/move existing material.",
+            "Place everything from the Unassigned pool so all curriculum is covered.",
+            "Optionally set an advance date/time per round.",
         ],
         terms=[
-            ("Round", "One simulation session. Was 15 by default; change it to any number."),
-            ("Topic", "The curriculum unit taught that round — reorder freely."),
-            ("Advance at", "When the sim moves TO that round. Applied on next app load after "
-             "the time passes."),
+            ("Material / topic", "One curriculum unit (e.g. 'Customer discovery'). A round can "
+             "hold several."),
+            ("Move", "Send a topic to a different round — reorders the curriculum."),
+            ("Unassigned", "Topics not placed in any round yet; students won't see them."),
+            ("Advance at", "When the sim moves TO that round, applied on next app load."),
         ],
     )
 
@@ -58,55 +60,110 @@ def schedule():
     with c1:
         new_total = st.number_input(
             "Number of rounds", 1, 40, total,
-            help="How many rounds (weeks) the simulation runs. The default is 15. Growing adds "
-                 "rounds with default topics; shrinking drops the last rounds.")
+            help="How many rounds your class runs. Default 15. Shrinking moves any material "
+                 "from removed rounds onto the last round so nothing is lost.")
         if st.button("Apply number of rounds"):
             logic.set_total_rounds(int(new_total))
             st.success(f"Schedule now has {int(new_total)} rounds.")
             st.rerun()
     with c2:
-        nxt = logic.next_scheduled_advance()
+        unplaced = logic.unassigned_topics()
         st.caption(f"Current round: **{db.current_round()}** of {total}.")
+        st.caption(f"Curriculum coverage: **{len(content.CURRICULUM_TOPICS) - len(unplaced)}"
+                   f"/{len(content.CURRICULUM_TOPICS)}** topics placed.")
+        nxt = logic.next_scheduled_advance()
         if nxt:
             st.caption(f"⏱️ Next auto-advance: Round {nxt[0]} at {nxt[1]}.")
-        else:
-            st.caption("No future auto-advance scheduled — rounds advance manually.")
+
+    round_choices = list(range(1, total + 1))
+    unplaced = logic.unassigned_topics()
 
     st.divider()
     st.write("### Rounds")
-    topic_keys = content.DEFAULT_TOPIC_ORDER
     for row in logic.get_schedule():
         rnd = row["round"]
-        title = row["topic"]["title"] if row["topic"] else "—"
-        with st.expander(f"Round {rnd} — {title}"):
-            tk = st.selectbox(
-                "Topic", topic_keys,
-                index=topic_keys.index(row["topic_key"]) if row["topic_key"] in topic_keys else 0,
-                format_func=lambda k: content.CURRICULUM_BY_KEY[k]["title"],
-                key=f"sch_topic_{rnd}",
-                help="Which curriculum topic this round teaches. Change it to reorder topics.")
+        names = " + ".join(t["title"] for t in row["topics"]) or "— empty —"
+        with st.expander(f"Round {rnd} — {names}"):
+            # Existing material: remove or move each item.
+            if row["topics"]:
+                for tp in row["topics"]:
+                    mc1, mc2, mc3 = st.columns([3, 1.4, 1])
+                    mc1.markdown(f"**{tp['title']}**")
+                    mc1.caption(tp["class_focus"])
+                    move_to = mc2.selectbox(
+                        "Move to round", round_choices,
+                        index=rnd - 1, key=f"move_{rnd}_{tp['key']}",
+                        label_visibility="collapsed",
+                        help="Send this material to a different round.")
+                    if mc2.button("Move", key=f"movebtn_{rnd}_{tp['key']}"):
+                        db.set_topic_placement(tp["key"], int(move_to))
+                        st.rerun()
+                    if mc3.button("Remove", key=f"rmvbtn_{rnd}_{tp['key']}",
+                                  help="Unassign (moves it to the pool)."):
+                        db.remove_round_topic(tp["key"])
+                        st.rerun()
+            else:
+                st.caption("No material assigned to this round yet.")
+
+            # Add material to this round (from the unassigned pool).
+            if unplaced:
+                ac1, ac2 = st.columns([3, 1])
+                add_key = ac1.selectbox(
+                    "Add material", [t["key"] for t in unplaced],
+                    format_func=lambda k: content.CURRICULUM_BY_KEY[k]["title"],
+                    key=f"add_{rnd}", label_visibility="collapsed",
+                    help="Pick unassigned material to add to this round.")
+                if ac2.button("Add", key=f"addbtn_{rnd}"):
+                    db.set_topic_placement(add_key, rnd)
+                    st.rerun()
+            else:
+                st.caption("All curriculum material is placed. ✔")
+
+            # Advance date/time for this round.
             cur_dt = logic._parse_dt(row["advance_at"])
             set_time = st.checkbox("Schedule an advance date/time", value=cur_dt is not None,
                                    key=f"sch_chk_{rnd}",
                                    help="Tick to auto-advance TO this round at a set time.")
-            d = st.date_input("Advance date", value=(cur_dt.date() if cur_dt else date.today()),
-                              key=f"sch_date_{rnd}") if set_time else None
-            t = st.time_input("Advance time", value=(cur_dt.time() if cur_dt else time(9, 0)),
-                              key=f"sch_time_{rnd}") if set_time else None
-            if st.button("Save round", key=f"sch_save_{rnd}"):
-                db.set_schedule_topic(rnd, tk)
-                if set_time and d is not None and t is not None:
+            if set_time:
+                d = st.date_input("Advance date",
+                                  value=(cur_dt.date() if cur_dt else date.today()),
+                                  key=f"sch_date_{rnd}")
+                t = st.time_input("Advance time",
+                                  value=(cur_dt.time() if cur_dt else time(9, 0)),
+                                  key=f"sch_time_{rnd}")
+                if st.button("Save advance time", key=f"sch_save_{rnd}"):
                     db.set_schedule_advance(rnd, datetime.combine(d, t).isoformat(timespec="minutes"))
-                else:
-                    db.set_schedule_advance(rnd, None)
-                st.success(f"Round {rnd} saved.")
+                    st.success(f"Round {rnd} advance time saved.")
+                    st.rerun()
+            elif cur_dt is not None and st.button("Clear advance time", key=f"sch_clr_{rnd}"):
+                db.set_schedule_advance(rnd, None)
+                st.rerun()
+
+    # Unassigned material pool.
+    st.divider()
+    st.write("### Unassigned material")
+    if not unplaced:
+        st.success("Every curriculum topic is assigned to a round. ✔")
+    else:
+        st.caption("These topics are not yet in any round — place them so students see them.")
+        for tp in unplaced:
+            uc1, uc2, uc3 = st.columns([3, 1.4, 1])
+            uc1.markdown(f"**{tp['title']}**")
+            uc1.caption(", ".join(tp["concepts"]))
+            to_round = uc2.selectbox(
+                "Round", round_choices, key=f"place_{tp['key']}",
+                label_visibility="collapsed")
+            if uc3.button("Place", key=f"placebtn_{tp['key']}"):
+                db.set_topic_placement(tp["key"], int(to_round))
                 st.rerun()
 
     st.divider()
-    if st.button("↩️ Reset to default 15-round order"):
+    if st.button("↩️ Reset to default (15 rounds, one topic each)"):
         logic.set_total_rounds(content.DEFAULT_TOTAL_ROUNDS)
+        for tp in content.CURRICULUM_TOPICS:
+            db.remove_round_topic(tp["key"])
         for i, key in enumerate(content.DEFAULT_TOPIC_ORDER):
-            db.set_schedule_topic(i + 1, key)
+            db.set_topic_placement(key, i + 1, 0)
             db.set_schedule_advance(i + 1, None)
         st.success("Schedule reset to the default order.")
         st.rerun()
@@ -159,34 +216,36 @@ def round_control():
             st.success("PIN updated.")
 
     st.divider()
-    wk = logic.topic_for_round(cur)
-    if wk:
-        st.write(f"### This round's plan — Round {cur}: {wk['title']}")
+    topics = logic.topics_for_round(cur)
+    if topics:
+        st.write(f"### This round's plan — Round {cur}")
         st.caption("Teach the concepts in the first session; the second session is the "
-                   "simulation round. Complexity builds round over round.")
-        st.info(f"**In class:** {wk['class_focus']}\n\n"
-                f"**Simulation task:** {wk['sim_task']}  ·  **Tool:** {wk['tool']}")
-        cc1, cc2 = st.columns(2)
-        with cc1:
-            st.markdown("**Learning objectives**")
-            for o in wk["objectives"]:
-                st.markdown(f"- {o}")
-        with cc2:
-            st.markdown("**Concepts introduced**")
-            for c in wk["concepts"]:
-                st.markdown(f"- {c}")
+                   "simulation round. A round may cover several pieces of material.")
+        for tp in topics:
+            st.info(f"**{tp['title']}** — {tp['class_focus']}\n\n"
+                    f"Task: {tp['sim_task']}  ·  Tool: {tp['tool']}")
+            cc1, cc2 = st.columns(2)
+            with cc1:
+                st.markdown("**Learning objectives**")
+                for o in tp["objectives"]:
+                    st.markdown(f"- {o}")
+            with cc2:
+                st.markdown("**Concepts introduced**")
+                for c in tp["concepts"]:
+                    st.markdown(f"- {c}")
         newly = [p for p in logic.newly_unlocked(cur) if p not in content.BASE_TOOLS]
         if newly:
             st.success("🔓 Tools introduced to students this round: " + ", ".join(newly))
+    else:
+        st.warning("No material is assigned to this round. Add some on Schedule & Timing.")
 
     st.divider()
     st.write(f"### {total}-round map")
-    st.caption("The current schedule. Reorder topics, change the number of rounds, and set "
-               "advance times on the **Schedule & Timing** page.")
+    st.caption("The current schedule. Add/remove/move material, change the number of rounds, "
+               "and set advance times on the **Schedule & Timing** page.")
     st.dataframe(
         [{"Round": row["round"],
-          "Topic": row["topic"]["title"] if row["topic"] else "—",
-          "Concepts": ", ".join(row["topic"]["concepts"]) if row["topic"] else "",
+          "Material": " + ".join(t["title"] for t in row["topics"]) or "—",
           "Advance at": row["advance_at"] or "—"}
          for row in logic.get_schedule()],
         use_container_width=True, hide_index=True,
