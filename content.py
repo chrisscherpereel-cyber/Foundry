@@ -81,6 +81,51 @@ FOUNDER_CARDS = [
     },
 ]
 
+# A neutral, well-rounded founder card used by the "balanced" quick setup so that
+# no team starts with an inherent skill advantage.
+BALANCED_FOUNDER_CARD = {
+    "name": "Balanced Founders",
+    "skills": "A rounded mix of design, technical, and commercial ability with no single "
+              "dominant strength or fatal gap",
+    "networks": "University community plus a few local businesses",
+    "budget": 3000,
+    "hours": 120,
+    "risk": "Moderate",
+    "ethics": "Committed to honest, privacy-respecting practices",
+}
+
+# --------------------------------------------------------------------------- #
+# Difficulty levels — set the starting resources every team receives.
+# Higher difficulty = leaner cash, credits, hours, and a lower market ceiling,
+# so teams must be more disciplined. Every team in a cohort uses the SAME level,
+# which is what keeps their odds of success equal.
+# --------------------------------------------------------------------------- #
+DIFFICULTY_ORDER = ["Novice", "Easy", "Standard", "Hard", "Expert"]
+DIFFICULTY_LEVELS = {
+    "Novice": {
+        "capital": 6000, "credits": 30, "hours": 200, "market_potential": 1_500_000,
+        "blurb": "Very forgiving. Generous cash, credits, and time — good for a first "
+                 "run or a short course where you want teams to experiment freely.",
+    },
+    "Easy": {
+        "capital": 4500, "credits": 20, "hours": 160, "market_potential": 1_250_000,
+        "blurb": "Comfortable resources with a little pressure. Mistakes are recoverable.",
+    },
+    "Standard": {
+        "capital": 3000, "credits": 12, "hours": 120, "market_potential": 1_000_000,
+        "blurb": "The default balance. Teams must prioritize which assumptions to test.",
+    },
+    "Hard": {
+        "capital": 2000, "credits": 8, "hours": 100, "market_potential": 800_000,
+        "blurb": "Scarce resources. Every experiment purchase is a real trade-off.",
+    },
+    "Expert": {
+        "capital": 1200, "credits": 5, "hours": 80, "market_potential": 600_000,
+        "blurb": "Ruthless scarcity. Only the cheapest, highest-learning experiments "
+                 "survive — best for advanced or capstone students.",
+    },
+}
+
 # --------------------------------------------------------------------------- #
 # Evidence-strength ladder — behavior beats opinion
 # --------------------------------------------------------------------------- #

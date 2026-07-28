@@ -133,6 +133,80 @@ def assumption_risk_report(team_id):
     }
 
 
+def quick_setup_teams(n_teams, difficulty, opportunity_mode="distinct",
+                      opportunity_choice=None, founder_mode="balanced",
+                      name_prefix="Team", clear_existing=False):
+    """Create a balanced cohort of teams in one step.
+
+    Every team receives IDENTICAL starting resources and market potential (from the
+    chosen difficulty preset), which is what equalizes their odds of success. Only
+    flavor differs by option:
+      opportunity_mode : "same"     -> all teams get opportunity_choice
+                         "distinct" -> rotate distinct territories (still balanced)
+      founder_mode     : "balanced" -> everyone gets the neutral balanced card
+                         "varied"   -> rotate founder archetypes, but resources are
+                                       still forced equal so no one is advantaged
+
+    Returns a list of {name, code, territory} for the teams created.
+    """
+    preset = content.DIFFICULTY_LEVELS.get(difficulty, content.DIFFICULTY_LEVELS["Standard"])
+    if clear_existing:
+        for t in db.list_teams():
+            db.delete_team(t["id"])
+    db.set_setting("difficulty", difficulty)
+
+    territories = content.OPPORTUNITY_TERRITORIES
+    if opportunity_mode == "same" and not opportunity_choice:
+        opportunity_choice = territories[0]
+
+    created = []
+    for i in range(int(n_teams)):
+        territory = (opportunity_choice if opportunity_mode == "same"
+                     else territories[i % len(territories)])
+        if founder_mode == "varied":
+            base_card = dict(content.FOUNDER_CARDS[i % len(content.FOUNDER_CARDS)])
+        else:
+            base_card = dict(content.BALANCED_FOUNDER_CARD)
+        # Force equal resources regardless of the card's own defaults => fair start.
+        base_card["budget"] = preset["capital"]
+        base_card["hours"] = preset["hours"]
+
+        name = f"{name_prefix} {i + 1}"
+        code = db.create_team(
+            name, territory, base_card,
+            capital=preset["capital"], evidence_credits=preset["credits"],
+            founder_hours=preset["hours"], market_potential=preset["market_potential"],
+        )
+        created.append({"name": name, "code": code, "territory": territory})
+    return created
+
+
+def cohort_balance(team_list):
+    """Report how equal the teams' starting resources are (fairness check).
+
+    Returns a dict with the spread of capital, credits, hours, and market potential.
+    A spread of 0 means a perfectly balanced cohort.
+    """
+    if not team_list:
+        return None
+
+    def spread(key):
+        vals = [t[key] for t in team_list]
+        return {"min": min(vals), "max": max(vals), "spread": round(max(vals) - min(vals), 2)}
+
+    balanced = all(
+        spread(k)["spread"] == 0
+        for k in ("capital", "evidence_credits", "founder_hours", "market_potential")
+    )
+    return {
+        "balanced": balanced,
+        "capital": spread("capital"),
+        "credits": spread("evidence_credits"),
+        "hours": spread("founder_hours"),
+        "market_potential": spread("market_potential"),
+    }
+
+
 def _alignment(props, key="tokens"):
     """Tokens-weighted average evidence support (0..1) for an allocation."""
     total = sum(max(0, p[key] or 0) for p in props)

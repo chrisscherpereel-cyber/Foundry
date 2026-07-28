@@ -109,6 +109,68 @@ def team_setup():
         ],
     )
 
+    # ---- Quick balanced setup ------------------------------------------------
+    st.write("### ⚡ Quick balanced setup")
+    st.caption("Create a whole cohort in one step. Every team gets IDENTICAL starting "
+               "resources for the chosen difficulty, so all teams have the same opportunity "
+               "for success. Territories and founder styles can vary for flavor without "
+               "changing anyone's odds.")
+    with st.form("quick_setup", clear_on_submit=False):
+        q1, q2 = st.columns(2)
+        n_teams = q1.number_input(
+            "Number of teams", 1, 12, 4,
+            help="How many teams to create. Each is named with the prefix below plus a number.")
+        difficulty = q2.selectbox(
+            "Difficulty level", content.DIFFICULTY_ORDER,
+            index=content.DIFFICULTY_ORDER.index("Standard"),
+            help="Sets the starting capital, credits, hours, and market ceiling for EVERY "
+                 "team. Novice = generous; Expert = ruthless scarcity.")
+        preset = content.DIFFICULTY_LEVELS[difficulty]
+        st.info(
+            f"**{difficulty}** — {preset['blurb']}\n\n"
+            f"Each team starts with **${preset['capital']:,} capital · "
+            f"{preset['credits']} Evidence Credits · {preset['hours']} founder-hours · "
+            f"${preset['market_potential']:,} market potential.**")
+
+        q3, q4 = st.columns(2)
+        opp_mode_label = q3.radio(
+            "Opportunity territories", ["Distinct per team", "Same for all teams"],
+            help="Distinct = each team gets a different problem area (avoids teams competing "
+                 "for the identical customers). Same = every team tackles one shared territory "
+                 "(maximum comparability). Odds of success are equal either way.")
+        opp_mode = "same" if opp_mode_label == "Same for all teams" else "distinct"
+        opp_choice = None
+        if opp_mode == "same":
+            opp_choice = q3.selectbox(
+                "Shared territory", content.OPPORTUNITY_TERRITORIES,
+                help="The single territory all teams will work in.")
+        founder_mode_label = q4.radio(
+            "Founder cards", ["Same balanced card", "Varied archetypes"],
+            help="Balanced = every team gets the same neutral, well-rounded founder card "
+                 "(most equal). Varied = teams get different founder styles for flavor, but "
+                 "their money and hours are still forced equal.")
+        founder_mode = "balanced" if founder_mode_label == "Same balanced card" else "varied"
+
+        q5, q6 = st.columns(2)
+        prefix = q5.text_input(
+            "Team name prefix", value="Team",
+            help="Teams are named like 'Team 1', 'Team 2', …")
+        clear_existing = q6.checkbox(
+            "Delete existing teams first", value=False,
+            help="Tick to start a clean cohort. WARNING: this permanently removes all current "
+                 "teams and their data.")
+
+        if st.form_submit_button("Generate balanced cohort",
+                                 help="Create all teams at once with equal starting resources."):
+            created = logic.quick_setup_teams(
+                n_teams, difficulty, opp_mode, opp_choice, founder_mode, prefix, clear_existing)
+            st.success(f"Created {len(created)} teams at **{difficulty}** difficulty. "
+                       "Give each team its join code below.")
+            st.table([{"Team": c["name"], "Join code": c["code"], "Territory": c["territory"]}
+                      for c in created])
+
+    st.divider()
+    st.write("### ➕ Add a single team manually")
     with st.form("create_team", clear_on_submit=True):
         name = st.text_input("Team name", help="A label for the team, e.g. 'Team Kestrel.'")
         c1, c2 = st.columns(2)
@@ -509,6 +571,24 @@ def overview():
             "High-risk untested": len(arep["exposed"]), "Experiments": eff["experiments"],
         })
     st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    # Fairness check — are all teams starting on equal footing?
+    diff = db.get_setting("difficulty", "not set")
+    bal = logic.cohort_balance(teams)
+    if bal:
+        if bal["balanced"]:
+            st.success(f"⚖️ Balanced cohort — every team has identical starting resources "
+                       f"(difficulty: **{diff}**). Equal opportunity for success.")
+        else:
+            st.warning(
+                f"⚖️ Resources are uneven across teams (difficulty: **{diff}**). "
+                f"Capital spread ${bal['capital']['spread']:,.0f}, "
+                f"credits spread {bal['credits']['spread']}, "
+                f"hours spread {bal['hours']['spread']}, "
+                f"market-potential spread ${bal['market_potential']['spread']:,.0f}. "
+                "This is expected once teams spend during play; large gaps at the START usually "
+                "mean teams were created manually with different values — use Quick Setup for "
+                "an equal-footing cohort.")
 
     st.divider()
     st.write("### Recognition dimensions")

@@ -18,6 +18,7 @@ import streamlit as st
 
 import db
 import content
+import branding
 import views_student as vs
 import views_instructor as vi
 
@@ -44,7 +45,7 @@ def logout():
 # Landing / login
 # --------------------------------------------------------------------------- #
 def landing():
-    st.title("🏭 Venture Foundry — The Evidence Economy")
+    branding.header()
     st.markdown(
         "> Students do not earn points for having a good idea. They earn resources by "
         "producing **credible evidence** that their business model could work."
@@ -112,6 +113,7 @@ def student_shell():
         st.stop()
 
     with st.sidebar:
+        branding.sidebar_logo()
         st.header(f"🎓 {team['name']}")
         st.caption(f"Round {db.current_round()} · {team['stage']}")
         st.metric("Credits", f"{team['evidence_credits']:.1f}")
@@ -141,8 +143,10 @@ INSTRUCTOR_PAGES = {
 
 def instructor_shell():
     with st.sidebar:
+        branding.sidebar_logo()
         st.header("🎩 Venture Foundry Director")
-        st.caption(f"Round {db.current_round()}")
+        diff = db.get_setting("difficulty", "not set")
+        st.caption(f"Round {db.current_round()} · Difficulty: {diff}")
         page = st.radio("Console", list(INSTRUCTOR_PAGES.keys()))
         with st.expander("Director's questions"):
             for q in [

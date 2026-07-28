@@ -21,7 +21,9 @@ first run and holds all cohort state (survives restarts).
 **🎩 Venture Foundry Director (instructor)** — log in with the PIN (default
 `foundry`, change it under *Round Control*):
 
-- **Team Setup** — create teams, assign an opportunity territory + founder card, set starting capital / Evidence Credits / founder-hours / market potential. Each team gets a unique join code.
+- **Team Setup** — two ways to create teams:
+  - **⚡ Quick balanced setup** — enter a number of teams and pick a **difficulty level (Novice → Easy → Standard → Hard → Expert)**. Every team is created with *identical* starting capital, Evidence Credits, founder-hours, and market potential, so all teams have an equal opportunity for success. Choose whether territories are **distinct per team** (teams avoid competing for identical customers) or **the same for all** (maximum comparability), and whether founders are a **shared balanced card** or **varied archetypes** (resources are equalized either way). Join codes are listed for handout.
+  - **Manual add** — create one team at a time with fully custom territory, founder card, and resources.
 - **Round Control** — advance the 15-week semester; view the week-by-week map.
 - **Resources** — grant or deduct capital, credits, and hours (funding rounds, penalties).
 - **Market Events** — issue events by category (Customer, Competitive, Operational, Regulatory & Ethical, Financial). Each event names the assumption it exposes. Broadcast to all teams, target one team, or roll a random event.
@@ -51,11 +53,22 @@ first run and holds all cohort state (survives restarts).
 - **Recognition dimensions**: strongest evidence-based venture, most improved model, best customer insight, most disciplined experiment portfolio, best responsible pivot, highest investor confidence, best overall — so an attractive starting idea can't dominate.
 - **VP Auction scoring**: `alignment = Σ(tokens × evidence_support) / Σtokens`; `Overconfidence Tax = (1 − alignment) × OVERCONFIDENCE_TAX_MAX`; `Learning Dividend = max(0, alignment − prev_alignment) × LEARNING_DIVIDEND_MAX`. All three constants are editable in `content.py`.
 
+## Keeping teams on equal footing
+
+The whole point of Quick Setup is a fair start. Recommended practices, several
+enforced by the app:
+
+- **One difficulty for the cohort** — Quick Setup applies the same resource preset to every team; the current level shows in the Director sidebar and on Cohort Overview.
+- **Equalized resources** — even the "varied founder archetypes" option overrides each card's money and hours so no team is richer at kickoff.
+- **Distinct territories** to stop teams scooping identical customers, or the same territory for a pure head-to-head — your call, odds are equal either way.
+- **Broadcast market events** so every team faces the same shock in the same round (use the "All teams" target or the 🎲 random-broadcast button).
+- **Balance check** — Cohort Overview flags whether every team still has identical starting resources, so you can spot an accidentally mis-created team.
+
 ## Tuning the game
 
 All content — territories, founder cards, experiment cards, market events,
-evidence ladder, dashboard dimensions, semester map — lives in `content.py`.
-Edit it without touching the app logic.
+evidence ladder, dashboard dimensions, semester map, and the **difficulty presets**
+(`DIFFICULTY_LEVELS`) — lives in `content.py`. Edit it without touching the app logic.
 
 ## File map
 
@@ -63,8 +76,10 @@ Edit it without touching the app logic.
 |------|---------|
 | `app.py` | Routing, login, role shells |
 | `db.py` | SQLite schema + all data access |
-| `content.py` | Game content (cards, ladders, tables) |
-| `logic.py` | Valuation, evidence economy, analytics |
+| `content.py` | Game content (cards, ladders, tables, difficulty presets) |
+| `logic.py` | Valuation, evidence economy, quick-setup, analytics |
+| `branding.py` | Simulation logo (inline SVG) + header/sidebar helpers |
+| `assets/logo.svg` | The logo as a standalone SVG file (README, favicons, print) |
 | `views_student.py` | Team screens |
 | `views_instructor.py` | Director console |
 
