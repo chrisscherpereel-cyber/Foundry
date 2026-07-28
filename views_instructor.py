@@ -41,16 +41,18 @@ def schedule():
         "material' pool at the bottom until you slot it in. You can also set a date/time for a "
         "round to begin (applied the next time the app is opened after that time).",
         steps=[
-            "Set the number of rounds your class will actually run, then Apply.",
-            "For each round, add material from the dropdown, or remove/move existing material.",
-            "Place everything from the Unassigned pool so all curriculum is covered.",
+            "Set how many rounds your class runs and click Apply & auto-balance.",
+            "Review the suggested balanced arrangement; Apply it if you like it.",
+            "Fine-tune by moving individual concepts between rounds.",
             "Optionally set an advance date/time per round.",
         ],
         terms=[
             ("Material / topic", "One curriculum unit (e.g. 'Customer discovery'). A round can "
              "hold several."),
-            ("Move", "Send a topic to a different round — reorders the curriculum."),
-            ("Unassigned", "Topics not placed in any round yet; students won't see them."),
+            ("Load", "How much material a round holds (its concepts + objectives). Balancing "
+             "keeps the heaviest round as light as possible."),
+            ("Balanced arrangement", "Splits the curriculum, in logical order, into even-load "
+             "rounds so no round is heavier than another."),
             ("Advance at", "When the sim moves TO that round, applied on next app load."),
         ],
     )
@@ -60,20 +62,47 @@ def schedule():
     with c1:
         new_total = st.number_input(
             "Number of rounds", 1, 40, total,
-            help="How many rounds your class runs. Default 15. Shrinking moves any material "
-                 "from removed rounds onto the last round so nothing is lost.")
-        if st.button("Apply number of rounds"):
-            logic.set_total_rounds(int(new_total))
-            st.success(f"Schedule now has {int(new_total)} rounds.")
+            help="How many rounds your class runs. Default 15. Applying auto-balances the "
+                 "curriculum across that many rounds so no round is overloaded.")
+        if st.button("Apply & auto-balance"):
+            n = int(new_total)
+            logic.set_total_rounds(n)
+            logic.apply_layout(logic.suggest_balanced_layout(n))
+            st.success(f"Schedule set to {n} rounds and balanced by logical content.")
             st.rerun()
     with c2:
         unplaced = logic.unassigned_topics()
         st.caption(f"Current round: **{db.current_round()}** of {total}.")
         st.caption(f"Curriculum coverage: **{len(content.CURRICULUM_TOPICS) - len(unplaced)}"
                    f"/{len(content.CURRICULUM_TOPICS)}** topics placed.")
+        loads = [logic.round_load(r["round"]) for r in logic.get_schedule()]
+        if loads:
+            st.caption(f"Round load — min {min(loads)}, max {max(loads)} "
+                       f"(closer together = more balanced).")
         nxt = logic.next_scheduled_advance()
         if nxt:
             st.caption(f"⏱️ Next auto-advance: Round {nxt[0]} at {nxt[1]}.")
+
+    # ---- Suggested balanced arrangement ------------------------------------
+    st.divider()
+    st.write("### ✨ Suggested balanced arrangement")
+    st.caption("Keeps concepts in their logical order and splits them into even-load rounds so "
+               "no round is heavier than another. Preview below — apply it, then move anything "
+               "you want by hand.")
+    suggestion = logic.suggest_balanced_layout(total)
+    summary = logic.layout_load_summary(suggestion)
+    st.dataframe(
+        [{"Round": s["round"], "Material": s["titles"], "Concepts+objectives (load)": s["load"]}
+         for s in summary],
+        use_container_width=True, hide_index=True,
+    )
+    if summary:
+        sload = [s["load"] for s in summary]
+        st.caption(f"Suggested load spread: min {min(sload)}, max {max(sload)}.")
+    if st.button("✨ Apply suggested balanced arrangement"):
+        logic.apply_layout(suggestion)
+        st.success("Applied the balanced arrangement. Move any concept below to fine-tune.")
+        st.rerun()
 
     round_choices = list(range(1, total + 1))
     unplaced = logic.unassigned_topics()
@@ -83,7 +112,7 @@ def schedule():
     for row in logic.get_schedule():
         rnd = row["round"]
         names = " + ".join(t["title"] for t in row["topics"]) or "— empty —"
-        with st.expander(f"Round {rnd} — {names}"):
+        with st.expander(f"Round {rnd} · load {logic.round_load(rnd)} — {names}"):
             # Existing material: remove or move each item.
             if row["topics"]:
                 for tp in row["topics"]:

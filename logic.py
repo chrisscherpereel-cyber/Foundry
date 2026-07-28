@@ -48,6 +48,98 @@ def unassigned_topics():
     return [t for t in content.CURRICULUM_TOPICS if t["key"] not in placed]
 
 
+# --------------------------------------------------------------------------- #
+# Balanced auto-arrangement
+#   Each topic has a "load" (how much material it is). We split the ordered
+#   curriculum into as many contiguous groups as there are rounds, minimizing the
+#   heaviest round — so related concepts stay together and no round is overloaded.
+# --------------------------------------------------------------------------- #
+def topic_load(topic):
+    """A rough effort weight for a topic: its concepts plus objectives."""
+    if not topic:
+        return 0
+    return len(topic.get("concepts", [])) + len(topic.get("objectives", []))
+
+
+def _balanced_group_sizes(weights, k):
+    """Split a sequence of weights into k contiguous groups minimizing the max
+    group sum (classic linear-partition DP). Returns a list of k group sizes.
+    """
+    n = len(weights)
+    if k <= 1:
+        return [n]
+    if k >= n:
+        return [1] * n + [0] * (k - n)
+    prefix = [0]
+    for w in weights:
+        prefix.append(prefix[-1] + w)
+    INF = float("inf")
+    dp = [[INF] * (k + 1) for _ in range(n + 1)]
+    back = [[0] * (k + 1) for _ in range(n + 1)]
+    dp[0][0] = 0
+    for i in range(1, n + 1):
+        for j in range(1, min(i, k) + 1):
+            for p in range(j - 1, i):
+                seg = prefix[i] - prefix[p]
+                cost = max(dp[p][j - 1], seg)
+                if cost < dp[i][j]:
+                    dp[i][j] = cost
+                    back[i][j] = p
+    sizes, i, j = [], n, k
+    while j > 0:
+        p = back[i][j]
+        sizes.append(i - p)
+        i, j = p, j - 1
+    sizes.reverse()
+    return sizes
+
+
+def suggest_balanced_layout(n_rounds=None, order=None):
+    """Suggest a balanced arrangement: {round: [topic_key, ...]}.
+
+    Topics are taken in their logical curriculum order and split into contiguous
+    groups so that related concepts stay together and the heaviest round is as
+    light as possible.
+    """
+    n_rounds = int(n_rounds or total_rounds())
+    order = order or content.DEFAULT_TOPIC_ORDER
+    weights = [topic_load(content.CURRICULUM_BY_KEY[k]) for k in order]
+    sizes = _balanced_group_sizes(weights, n_rounds)
+    layout, idx = {}, 0
+    for r, size in enumerate(sizes, start=1):
+        layout[r] = order[idx:idx + size]
+        idx += size
+    return layout
+
+
+def layout_load_summary(layout):
+    """For a {round:[keys]} layout, return [{round, titles, load, count}]."""
+    out = []
+    for r in sorted(layout):
+        keys = layout[r]
+        out.append({
+            "round": r,
+            "titles": " + ".join(content.CURRICULUM_BY_KEY[k]["title"] for k in keys) or "—",
+            "load": sum(topic_load(content.CURRICULUM_BY_KEY[k]) for k in keys),
+            "count": len(keys),
+        })
+    return out
+
+
+def apply_layout(layout):
+    """Replace the whole schedule assignment with the given {round:[keys]} layout."""
+    for tp in content.CURRICULUM_TOPICS:
+        db.remove_round_topic(tp["key"])
+    for r in sorted(layout):
+        for pos, key in enumerate(layout[r]):
+            db.set_topic_placement(key, r, pos)
+
+
+def round_load(rnd):
+    """Total load currently assigned to a round."""
+    return sum(topic_load(t) for t in topics_for_round(rnd))
+
+
 def set_total_rounds(n):
     """Change how many rounds the simulation runs.
 
