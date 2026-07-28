@@ -3,15 +3,20 @@ branding.py — Venture Foundry visual identity.
 
 Holds the simulation's custom logo (an inline SVG: a foundry hex badge with rising
 "evidence bars" and a spark of insight) and small helpers to render it in the app.
-The SVG is inlined so it renders identically without any external image hosting.
+
+IMPORTANT: Streamlit's Markdown renderer treats any line indented 4+ spaces as a
+code block, which would print raw HTML/SVG to the screen. So every string we hand
+to st.markdown is collapsed to a single unindented line via _oneline() before use.
 """
 
 import streamlit as st
 
-# The logo is kept here as a string so it can be dropped into HTML directly.
-# assets/logo.svg holds the same artwork for reuse (README, favicons, print).
-LOGO_SVG = """
-<svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Venture Foundry logo" width="{w}" height="{w}">
+# Raw logo artwork. Kept multi-line here for readability; _oneline() flattens it
+# before it ever reaches st.markdown. assets/logo.svg holds the same artwork.
+_LOGO_SVG = """
+<svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg" role="img"
+     aria-label="Venture Foundry logo" width="{w}" height="{w}"
+     style="display:block;flex:0 0 auto;">
   <defs>
     <linearGradient id="vfBg" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#2b3a5c"/><stop offset="1" stop-color="#141c2e"/>
@@ -35,40 +40,43 @@ LOGO_SVG = """
 """
 
 
+def _oneline(html):
+    """Collapse markup to a single line with no leading indentation.
+
+    This is what prevents Streamlit's Markdown parser from rendering the HTML as a
+    literal code block.
+    """
+    return " ".join(line.strip() for line in html.strip().splitlines() if line.strip())
+
+
 def logo_svg(width=64):
-    """Return the logo SVG markup sized to `width` pixels."""
-    return LOGO_SVG.format(w=width)
+    """Return the logo SVG markup, flattened and sized to `width` pixels."""
+    return _oneline(_LOGO_SVG).replace("{w}", str(width))
 
 
 def header(subtitle="THE EVIDENCE ECONOMY"):
     """Large logo + wordmark for the landing page."""
-    st.markdown(
-        f"""
-        <div style="display:flex;align-items:center;gap:16px;margin:4px 0 8px;">
-          {logo_svg(76)}
-          <div style="line-height:1.15;">
-            <div style="font-size:30px;font-weight:800;letter-spacing:.5px;">VENTURE FOUNDRY</div>
-            <div style="font-size:13px;letter-spacing:3px;opacity:.65;">{subtitle}</div>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    html = (
+        '<div style="display:flex;align-items:center;gap:16px;margin:4px 0 8px;">'
+        + logo_svg(76)
+        + '<div style="line-height:1.15;">'
+        + '<div style="font-size:30px;font-weight:800;letter-spacing:.5px;">VENTURE FOUNDRY</div>'
+        + f'<div style="font-size:13px;letter-spacing:3px;opacity:.65;">{subtitle}</div>'
+        + '</div></div>'
     )
+    st.markdown(html, unsafe_allow_html=True)
 
 
 def sidebar_logo(caption=""):
     """Compact logo + wordmark for a sidebar."""
-    st.markdown(
-        f"""
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
-          {logo_svg(38)}
-          <div style="line-height:1.1;">
-            <div style="font-size:15px;font-weight:800;letter-spacing:.4px;">VENTURE FOUNDRY</div>
-            <div style="font-size:10px;letter-spacing:2px;opacity:.6;">EVIDENCE ECONOMY</div>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    html = (
+        '<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">'
+        + logo_svg(38)
+        + '<div style="line-height:1.1;">'
+        + '<div style="font-size:15px;font-weight:800;letter-spacing:.4px;">VENTURE FOUNDRY</div>'
+        + '<div style="font-size:10px;letter-spacing:2px;opacity:.6;">EVIDENCE ECONOMY</div>'
+        + '</div></div>'
     )
+    st.markdown(html, unsafe_allow_html=True)
     if caption:
         st.caption(caption)
