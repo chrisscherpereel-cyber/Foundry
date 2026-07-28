@@ -34,16 +34,49 @@ first run and holds all cohort state (survives restarts).
 
 **🎓 Team (student)** — enter with the join code:
 
+- **Round Briefing** — the starting point each week: this round's learning objectives, the concepts introduced in class, the specific simulation task, which tool to use, and what's newly unlocked. Includes the full 15-week arc so students see how complexity builds.
 - **Dashboard** — resources, live venture valuation, performance dimensions, and a warning list of high-importance untested assumptions.
 - **Founder & Opportunity** — your founder card and territory; log ≥3 candidate ventures scored on importance, fit, access, evidence availability, affordability.
-- **Canvases** — versioned Customer Profile, Value Proposition Canvas, and Business Model Canvas with dated change notes and full history.
+- **Canvases** — the real Strategyzer canvases in their canonical layouts: **Customer Profile** (the circle — gains / jobs / pains), the **Value Proposition Canvas** (value-map square beside the customer-profile circle, so the "fit" is visible), and the **Business Model Canvas** (the nine blocks in their standard grid positions). All versioned with dated change notes and full history.
 - **VP Auction** — field ≥3 competing value propositions, then privately allocate 100 Venture Tokens. The round scores automatically: an **Overconfidence Tax** hits tokens parked on weakly-supported propositions, and a **Learning Dividend** rewards redirecting tokens toward better-supported ones vs. your last auction. Net Evidence Credits are applied on submit; a live preview shows the outcome before you commit.
 - **Assumption Map** — convert the venture into testable assumptions, classify by risk type (desirability / feasibility / viability / adaptability), importance, existing evidence, testability; auto-computed priority.
 - **Experiment Marketplace** — buy experiment cards with limited money / hours / credits; you must state hypothesis, metric, success + failure thresholds, and decision rule *before* recording results.
 - **Evidence Ledger** — log evidence against the strength ladder; behavioral evidence outranks opinion and earns Evidence Credits proportional to strength.
 - **Market Events** — events pushed by the Director, each exposing an assumption.
 - **Pivot Petition** — submit a formal, evidence-backed petition for committee review.
+- **AI Assist Log** — where teams record every use of generative AI and verify it (see below).
 - **Decision Journal** — individual weekly reflections for accountability.
+
+## Weekly curriculum & progressive complexity
+
+The simulation is built to add complexity one week at a time. Each of the 15
+weeks has defined **learning objectives** and **concepts** (taught in the first
+class session), with the second session being the simulation round that applies
+them. `content.py` holds the full `WEEKLY_CURRICULUM`, and `PAGE_UNLOCK_WEEK`
+records when each tool is formally introduced:
+
+- The student **Round Briefing** and the Director's **Round Control** both surface the current week's objectives, concepts, task, and newly unlocked tools.
+- In the student sidebar each tool is labelled with the week it's introduced; tools reached in a later week show a 🔒 and a gentle "introduced in Week N" banner but remain explorable — complexity is *guided*, not hard-locked.
+- The arc runs founder/opportunity formation → customer discovery → value proposition → business model → assumptions → experiments → market testing → pivots → economics → scaling → investment defense.
+
+## Generative AI + the AUDIT verification methodology
+
+Students are expected to use generative AI every round — but the app enforces the
+course's core principle that **AI output is confident opinion, not evidence**. Any
+AI suggestion is treated as evidence strength 0 until it passes the **AUDIT** check
+and is translated into real-world evidence:
+
+- **A — Assumptions surfaced**: what must be true for the AI's suggestion to hold?
+- **U — Unsupported claims flagged**: which parts are confident but unproven?
+- **D — Data & sources checked**: hallucinations, stale data, bias?
+- **I — Independent test designed**: the cheapest real test to verify it.
+- **T — Translate to evidence**: the strength the real test produced.
+
+Teams log each AI use on the **AI Assist Log** page and complete the AUDIT; entries
+stay *Unverified* until a real test supports them. A one-click AUDIT reminder also
+appears on the Canvases, Assumptions, VP Auction, and Pivot pages, and the Director
+reviews every team's AI use (and how much remains unverified) from the **AI use** tab
+on Cohort Overview.
 
 ## The models built in
 

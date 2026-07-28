@@ -53,6 +53,79 @@ def _refresh_team(team_id):
     return db.get_team(team_id)
 
 
+def _unlock_notice(page_name):
+    """Soft progressive-complexity banner: tools stay usable, but we flag early access."""
+    wk = content.PAGE_UNLOCK_WEEK.get(page_name)
+    cur = db.current_round()
+    if wk and cur < wk:
+        st.warning(
+            f"🔒 This tool is formally introduced in **Week {wk}** — its concepts are taught "
+            f"then. You're in Round {cur}, so feel free to explore, but the guided sequence "
+            f"reaches it in Week {wk}.")
+
+
+def _ai_check_notice():
+    """Reusable reminder wherever generative AI is likely to be used."""
+    with st.expander("🤖 Using generative AI here? Run the AUDIT check first"):
+        st.markdown(content.AI_PROTOCOL_SUMMARY)
+
+
+# --------------------------------------------------------------------------- #
+# Round Briefing — the week's learning objectives and simulation task
+# --------------------------------------------------------------------------- #
+def round_briefing(team):
+    cur = db.current_round()
+    wk = content.WEEKLY_CURRICULUM.get(cur)
+    st.subheader(f"📅 Round Briefing — Week {cur}" + (f": {wk['title']}" if wk else ""))
+    _guide(
+        "The simulation adds complexity one week at a time. In the first class session each "
+        "week your instructor introduces new concepts; this round is where you apply them. "
+        "Start here every week: it tells you the learning objectives, what's new, the exact "
+        "simulation task, and which tool to use. You'll also use generative AI this round — "
+        "but remember to verify what it produces (see the AI reminder below).",
+        terms=[
+            ("Learning objectives", "What you should be able to DO by the end of this round."),
+            ("Concepts introduced", "New ideas taught in class this week."),
+            ("This round's task", "The specific simulation action to complete now."),
+        ],
+    )
+    if not wk:
+        st.info("No briefing configured for this round.")
+        return
+
+    st.write(f"### 🎓 In class this week\n{wk['class_focus']}")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**Learning objectives**")
+        for o in wk["objectives"]:
+            st.markdown(f"- {o}")
+    with c2:
+        st.markdown("**Concepts introduced**")
+        for c in wk["concepts"]:
+            st.markdown(f"- {c}")
+
+    st.success(f"**🎯 This round's simulation task:** {wk['sim_task']}\n\n"
+               f"**Go to:** *{wk['tool']}* in the sidebar.")
+
+    # What unlocks this week
+    newly = [p for p, w in content.PAGE_UNLOCK_WEEK.items() if w == cur]
+    if newly:
+        st.info("🔓 **New this week:** " + ", ".join(newly))
+
+    st.divider()
+    st.markdown("**🤖 Generative AI this round**")
+    st.markdown(content.AI_PROTOCOL_SUMMARY)
+
+    with st.expander("Full 15-week arc (how complexity builds)"):
+        st.dataframe(
+            [{"Week": w, "Focus": d["title"],
+              "Concepts": ", ".join(d["concepts"]), "Task": d["sim_task"]}
+             for w, d in content.WEEKLY_CURRICULUM.items()],
+            use_container_width=True, hide_index=True,
+        )
+
+
 # --------------------------------------------------------------------------- #
 # Dashboard
 # --------------------------------------------------------------------------- #
@@ -271,33 +344,124 @@ _CANVAS_HELP = {
 }
 
 
+def _cbox(parent, title, key, prefill, height=120, hint=""):
+    """Render one canvas block (bordered box, title, textarea) and return its value.
+
+    `parent` may be the `st` module or a column — both expose .container()/.text_area(),
+    so we call methods directly rather than using a `with` block (the module isn't a
+    context manager).
+    """
+    box = parent.container(border=True)
+    box.markdown(f"**{title}**")
+    if hint:
+        box.caption(hint)
+    return box.text_area(title, value=prefill, key=key, height=height,
+                         label_visibility="collapsed")
+
+
+def _customer_profile_layout(ctype, val):
+    """Strategyzer Customer Profile (the circle): Gains, Jobs, Pains."""
+    st.caption("The customer 'circle' — describe the segment from the outside in. "
+               "Gains (wanted outcomes) · Jobs (what they're trying to get done) · Pains (bad outcomes).")
+    data = {}
+    data["gains"] = _cbox(st, "😀 Gains (top of circle)", f"{ctype}_gains", val("gains"),
+                          110, "Benefits and positive outcomes the customer wants.")
+    data["customer_jobs"] = _cbox(st, "🎯 Customer Jobs (centre)", f"{ctype}_customer_jobs",
+                                  val("customer_jobs"), 110,
+                                  "Functional, social, and emotional jobs they're trying to get done.")
+    data["pains"] = _cbox(st, "😣 Pains (bottom of circle)", f"{ctype}_pains", val("pains"),
+                          110, "Frustrations, risks, and obstacles they experience.")
+    return data
+
+
+def _vpc_layout(ctype, val):
+    """Value Proposition Canvas: value map (square, left) + customer profile (circle, right)."""
+    st.caption("Left = **Value Map** (the square, your offer). Right = **Customer Profile** "
+               "(the circle, the customer). A good value proposition 'fits': gain creators → "
+               "gains, pain relievers → pains, products & services → jobs.")
+    left, right = st.columns(2)
+    data = {}
+    left.markdown("#### ▮ Value Map")
+    data["gain_creators"] = _cbox(left, "➕ Gain Creators (top)", f"{ctype}_gain_creators",
+                                  val("gain_creators"), 100,
+                                  "How your offer produces the gains customers want.")
+    data["products_services"] = _cbox(left, "📦 Products & Services (centre)",
+                                      f"{ctype}_products_services", val("products_services"),
+                                      100, "What you offer that addresses the customer's jobs.")
+    data["pain_relievers"] = _cbox(left, "🩹 Pain Relievers (bottom)", f"{ctype}_pain_relievers",
+                                   val("pain_relievers"), 100,
+                                   "How your offer eases specific customer pains.")
+    right.markdown("#### ◯ Customer Profile")
+    data["gains_created"] = _cbox(right, "😀 Gains (top)", f"{ctype}_gains_created",
+                                  val("gains_created"), 100, "The specific gains you create.")
+    data["jobs_addressed"] = _cbox(right, "🎯 Customer Jobs (centre)", f"{ctype}_jobs_addressed",
+                                   val("jobs_addressed"), 100, "The jobs this proposition targets.")
+    data["pains_reduced"] = _cbox(right, "😣 Pains (bottom)", f"{ctype}_pains_reduced",
+                                  val("pains_reduced"), 100, "The specific pains you reduce.")
+    return data
+
+
+def _bmc_layout(ctype, val):
+    """Business Model Canvas in its canonical nine-block grid."""
+    st.caption("The nine blocks in their standard Strategyzer positions. Infrastructure on the "
+               "left, customers on the right, value in the centre, finances along the bottom. "
+               "Remember: the blocks depend on each other.")
+    data = {}
+    top = st.columns(5)
+    data["key_partners"] = _cbox(top[0], "🤝 Key Partners", f"{ctype}_key_partners",
+                                 val("key_partners"), 240, "Who helps you?")
+    data["key_activities"] = _cbox(top[1], "⚙️ Key Activities", f"{ctype}_key_activities",
+                                   val("key_activities"), 100, "What you must do well.")
+    data["key_resources"] = _cbox(top[1], "🏭 Key Resources", f"{ctype}_key_resources",
+                                  val("key_resources"), 100, "Assets the model requires.")
+    data["value_propositions"] = _cbox(top[2], "💡 Value Propositions", f"{ctype}_value_propositions",
+                                       val("value_propositions"), 240, "The value you deliver.")
+    data["customer_relationships"] = _cbox(top[3], "❤️ Customer Relationships",
+                                           f"{ctype}_customer_relationships",
+                                           val("customer_relationships"), 100,
+                                           "The relationship each segment expects.")
+    data["channels"] = _cbox(top[3], "🚚 Channels", f"{ctype}_channels", val("channels"),
+                             100, "How you reach and deliver to customers.")
+    data["customer_segments"] = _cbox(top[4], "👥 Customer Segments", f"{ctype}_customer_segments",
+                                      val("customer_segments"), 240, "For whom you create value.")
+    bottom = st.columns(2)
+    data["cost_structure"] = _cbox(bottom[0], "💸 Cost Structure", f"{ctype}_cost_structure",
+                                   val("cost_structure"), 100, "The dominant costs.")
+    data["revenue_streams"] = _cbox(bottom[1], "💰 Revenue Streams", f"{ctype}_revenue_streams",
+                                    val("revenue_streams"), 100, "How you earn revenue.")
+    return data
+
+
 def canvases(team):
     st.subheader("🗂️ Canvases")
+    _unlock_notice("Canvases")
     _guide(
-        "Canvases are structured one-page descriptions of your venture. Treat every box as a "
-        "**hypothesis** you'll later test, not a fact. Each time you learn something, save a "
-        "NEW version with a note on what changed — the simulation grades how your thinking "
-        "evolves, not just the final result.",
+        "These are the real Strategyzer canvases, laid out as they appear on paper. Treat every "
+        "box as a **hypothesis** you'll later test, not a fact. Each time you learn something, "
+        "save a NEW version with a note on what changed — the simulation grades how your "
+        "thinking evolves. Customer Profile is introduced in Week 3, the full VPC in Week 5, "
+        "and the Business Model Canvas in Week 7.",
         steps=[
-            "Pick a canvas type from the dropdown (start with Customer Profile).",
-            "Fill in each block. Empty is fine — you'll refine it over the semester.",
-            "Add a short 'what changed / why' note, then Save. This creates a dated version.",
-            "Revisit after experiments and save new versions as evidence comes in.",
+            "Pick a canvas from the dropdown (Customer Profile → VPC → BMC as the weeks progress).",
+            "Fill the boxes in their canonical positions. Empty is fine early on.",
+            "Add a short 'what changed / why' note, then Save to create a dated version.",
+            "Return after experiments and save new versions as evidence comes in.",
         ],
         terms=[
-            ("Customer Profile", "Jobs, pains, and gains of one customer segment."),
-            ("Value Proposition Canvas (VPC)", "How your products relieve pains and create gains."),
-            ("Business Model Canvas (BMC)", "The nine building blocks of the whole business."),
+            ("Customer Profile", "The circle: jobs, pains, and gains of one segment."),
+            ("Value Proposition Canvas", "Value map (square) + customer profile (circle) — the 'fit'."),
+            ("Business Model Canvas", "The nine blocks of the whole business."),
             ("Version", "A dated snapshot. Saving again makes v2, v3… so learning is visible."),
         ],
     )
+    _ai_check_notice()
 
     ctype = st.selectbox(
         "Canvas type",
         list(_CANVAS_DEFS.keys()),
         format_func=lambda k: _CANVAS_DEFS[k][0],
-        help="Choose which canvas to edit. Customer Profile → Value Proposition → Business "
-             "Model is the usual order.",
+        help="Customer Profile (Wk 3) → Value Proposition Canvas (Wk 5) → Business Model "
+             "Canvas (Wk 7) is the guided order.",
     )
     title, blocks = _CANVAS_DEFS[ctype]
     st.caption(_CANVAS_HELP[ctype])
@@ -305,18 +469,23 @@ def canvases(team):
     existing = db.list_canvases(team["id"], ctype)
     latest = existing[-1] if existing else None
 
+    def val(key):
+        return latest["data"].get(key, "") if latest else ""
+
     st.write(f"### {title}")
     if existing:
         st.caption(f"{len(existing)} version(s) saved. Editing starts from the latest.")
 
     with st.form(f"canvas_{ctype}", clear_on_submit=False):
-        data = {}
-        for key, label, hint in blocks:
-            prefill = latest["data"].get(key, "") if latest else ""
-            data[key] = st.text_area(
-                f"{label} — {hint}", value=prefill, key=f"{ctype}_{key}",
-                help=f"{label}: {hint}. Base this on evidence where you have it.")
-        label = st.text_input(
+        if ctype == "customer_profile":
+            data = _customer_profile_layout(ctype, val)
+        elif ctype == "vpc":
+            data = _vpc_layout(ctype, val)
+        else:
+            data = _bmc_layout(ctype, val)
+
+        st.divider()
+        vlabel = st.text_input(
             "Version label (optional)", value=f"{title} v{len(existing)+1}",
             help="A name for this snapshot, e.g. 'after 5 interviews'. Auto-filled for you.")
         note = st.text_input(
@@ -324,8 +493,8 @@ def canvases(team):
             help="One line on what you changed and what evidence prompted it. This is graded — "
                  "it shows your thinking evolved for a reason.")
         if st.form_submit_button(f"Save new {title} version",
-                                 help="Store the current text as a new dated version."):
-            v = db.save_canvas(team["id"], ctype, data, label, note)
+                                 help="Store the current boxes as a new dated version."):
+            v = db.save_canvas(team["id"], ctype, data, vlabel, note)
             st.success(f"Saved {title} version {v}.")
             st.rerun()
 
@@ -346,6 +515,7 @@ def canvases(team):
 # --------------------------------------------------------------------------- #
 def assumptions(team):
     st.subheader("🎯 Assumption Map & Market")
+    _unlock_notice("Assumption Map")
     _guide(
         "Every box on your canvases hides an assumption — something that must be TRUE for the "
         "venture to work. Here you list those assumptions and rank them. The simulation "
@@ -437,6 +607,7 @@ def assumptions(team):
 # --------------------------------------------------------------------------- #
 def experiments(team):
     st.subheader("🧪 Experiment Marketplace")
+    _unlock_notice("Experiment Marketplace")
     _guide(
         "This is where you buy tests for your assumptions. Each experiment card costs money, "
         "hours, and Evidence Credits, and gives evidence of a certain strength. The key "
@@ -564,6 +735,7 @@ def experiments(team):
 # --------------------------------------------------------------------------- #
 def evidence(team):
     st.subheader("📒 Evidence Ledger")
+    _unlock_notice("Evidence Ledger")
     _guide(
         "This is your proof file and your income source. Every time you gather real evidence, "
         "log it here. The simulation pays you Evidence Credits equal to the evidence's strength "
@@ -641,6 +813,7 @@ def evidence(team):
 # --------------------------------------------------------------------------- #
 def vp_auction(team):
     st.subheader("💠 Value Proposition Auction")
+    _unlock_notice("VP Auction")
     _guide(
         f"You created several value propositions — now show which you back most. You have "
         f"{content.VENTURE_TOKEN_POOL} Venture Tokens to spread across them. Betting big on an "
@@ -772,6 +945,7 @@ def vp_auction(team):
 # --------------------------------------------------------------------------- #
 def market_events(team):
     st.subheader("📡 Market Events")
+    _unlock_notice("Market Events")
     _guide(
         "Each round the Director introduces a market event — a competitor move, a rule change, "
         "a cost shock. These aren't random punishments: each one targets an assumption hidden "
@@ -802,6 +976,7 @@ def market_events(team):
 # --------------------------------------------------------------------------- #
 def pivots(team):
     st.subheader("🔀 Pivot Petition")
+    _unlock_notice("Pivot Petition")
     _guide(
         "A pivot is a deliberate change of direction backed by evidence — not just swapping to "
         "a new idea because the old one struggled. You can't simply declare a pivot; you file a "
@@ -943,3 +1118,85 @@ def reflections(team):
                 st.write(f"**Overlooked:** {r['overlooked']}")
                 st.write(f"**Differently:** {r['differently']}")
                 st.write(f"**My contribution:** {r['contribution']}")
+
+
+# --------------------------------------------------------------------------- #
+# AI Assist Log — generative AI use + AUDIT verification
+# --------------------------------------------------------------------------- #
+def ai_assist(team):
+    st.subheader("🤖 AI Assist Log")
+    _guide(
+        "You're expected to use generative AI every round — to draft canvases, brainstorm "
+        "propositions, design experiments, and more. But fluent AI text is NOT evidence: it's "
+        "confident opinion until you verify it. Log each AI use here and run it through the "
+        "**AUDIT** check. An AI idea stays 'Unverified' (evidence strength 0) until a real-world "
+        "test moves it up the evidence ladder.",
+        steps=[
+            "Record the tool area, your prompt, and the AI's key output.",
+            "Work through AUDIT: Assumptions, Unsupported claims, Data/sources, Independent test.",
+            "Design the cheapest real test, run it (Experiment Marketplace), and log the evidence.",
+            "Come back and set status to Verified, Rejected, or Modified.",
+        ],
+        terms=[
+            ("AUDIT", "Assumptions · Unsupported · Data/sources · Independent test · Translate."),
+            ("Unverified", "AI output not yet tested — treat as strength 0, mere opinion."),
+            ("Verified", "A real test supported it; now it's backed by ladder evidence."),
+        ],
+    )
+    st.markdown(content.AI_PROTOCOL_SUMMARY)
+
+    st.divider()
+    with st.form("add_ai_log", clear_on_submit=True):
+        st.markdown("**Log a new AI-assisted contribution**")
+        c1, c2 = st.columns(2)
+        rnd = c1.number_input("Round", 1, 15, db.current_round(),
+                              help="Which round you used AI in.")
+        tool_area = c2.selectbox("Where did you use AI?", content.AI_TOOL_AREAS,
+                                 help="Which part of the venture the AI helped with.")
+        prompt = st.text_area("Your prompt", help="What you asked the AI (paste or paraphrase).")
+        ai_output = st.text_area("AI output (key claims)",
+                                 help="The main ideas/claims the AI produced that you're considering using.")
+        st.markdown("**AUDIT check**")
+        audit = {}
+        for letter, name, desc in content.AI_AUDIT_STEPS:
+            audit[letter] = st.text_area(f"{letter} — {name}", help=desc, key=f"audit_{letter}")
+        status = st.selectbox("Status", content.AI_STATUS_OPTIONS,
+                              help="Unverified until a real test supports it.")
+        if st.form_submit_button("Log AI use", help="Save this AI contribution and its AUDIT."):
+            db.add_ai_log(team["id"], {
+                "round": int(rnd), "tool_area": tool_area, "prompt": prompt,
+                "ai_output": ai_output, "audit_a": audit["A"], "audit_u": audit["U"],
+                "audit_d": audit["D"], "audit_i": audit["I"], "audit_t": audit["T"],
+                "status": status,
+            })
+            st.success("AI use logged. Verify it with a real test before relying on it.")
+            st.rerun()
+
+    logs = db.list_ai_logs(team["id"])
+    if logs:
+        unv = sum(1 for l in logs if l["status"] == "Unverified")
+        st.divider()
+        st.write(f"### AI log — {len(logs)} entries · {unv} unverified")
+        for l in logs:
+            icon = {"Verified": "✅", "Rejected": "❌", "Modified": "✏️"}.get(l["status"], "⏳")
+            with st.expander(f"{icon} R{l['round']} · {l['tool_area']} · {l['status']} · {l['created_at']}"):
+                st.write(f"**Prompt:** {l['prompt']}")
+                st.write(f"**AI output:** {l['ai_output']}")
+                st.markdown("**AUDIT**")
+                st.write(f"- **A** Assumptions: {l['audit_a'] or '—'}")
+                st.write(f"- **U** Unsupported: {l['audit_u'] or '—'}")
+                st.write(f"- **D** Data/sources: {l['audit_d'] or '—'}")
+                st.write(f"- **I** Independent test: {l['audit_i'] or '—'}")
+                st.write(f"- **T** Translate to evidence: {l['audit_t'] or '—'}")
+                new_status = st.selectbox(
+                    "Update status", content.AI_STATUS_OPTIONS,
+                    index=content.AI_STATUS_OPTIONS.index(l["status"]),
+                    key=f"aist_{l['id']}",
+                    help="Set to Verified only after a real test supported the AI's claim.")
+                cc1, cc2 = st.columns(2)
+                if cc1.button("Save status", key=f"aisv_{l['id']}"):
+                    db.update_ai_log(l["id"], status=new_status)
+                    st.rerun()
+                if cc2.button("Delete", key=f"aidl_{l['id']}"):
+                    db.delete_ai_log(l["id"])
+                    st.rerun()

@@ -68,6 +68,27 @@ def round_control():
             st.success("PIN updated.")
 
     st.divider()
+    wk = content.WEEKLY_CURRICULUM.get(cur)
+    if wk:
+        st.write(f"### This week's plan — Week {cur}: {wk['title']}")
+        st.caption("Teach the concepts in the first session; the second session is the "
+                   "simulation round. Complexity builds week over week.")
+        st.info(f"**In class:** {wk['class_focus']}\n\n"
+                f"**Simulation task:** {wk['sim_task']}  ·  **Tool:** {wk['tool']}")
+        cc1, cc2 = st.columns(2)
+        with cc1:
+            st.markdown("**Learning objectives**")
+            for o in wk["objectives"]:
+                st.markdown(f"- {o}")
+        with cc2:
+            st.markdown("**Concepts introduced**")
+            for c in wk["concepts"]:
+                st.markdown(f"- {c}")
+        newly = [p for p, w in content.PAGE_UNLOCK_WEEK.items() if w == cur]
+        if newly:
+            st.success("🔓 Tools introduced to students this week: " + ", ".join(newly))
+
+    st.divider()
     st.write("### 15-week semester map")
     st.caption("Your week-by-week run-of-show. The highlighted row is the current round.")
     row = next((s for s in content.SEMESTER if s[0] == cur), None)
@@ -604,7 +625,8 @@ def overview():
     st.caption("Pick a team to inspect what they've produced across the four artifact types.")
     team = st.selectbox("Inspect team", teams, format_func=lambda t: t["name"], key="ov_team",
                         help="Which team's submitted work to review.")
-    tab1, tab2, tab3, tab4 = st.tabs(["Canvases", "Assumptions", "Experiments", "Reflections"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(
+        ["Canvases", "Assumptions", "Experiments", "Reflections", "AI use"])
     with tab1:
         for c in db.list_canvases(team["id"]):
             st.write(f"**{c['ctype']} v{c['version']}** · {c['label']} · {c['created_at']}")
@@ -619,3 +641,13 @@ def overview():
     with tab4:
         for r in db.list_reflections(team["id"]):
             st.write(f"- {r['student_name']} (R{r['round']}): {r['contribution'][:80]}")
+    with tab5:
+        logs = db.list_ai_logs(team["id"])
+        unv = sum(1 for l in logs if l["status"] == "Unverified")
+        st.caption(f"{len(logs)} AI-assist entries · {unv} still unverified. Check that teams "
+                   "verify AI output with real evidence rather than accepting it as fact.")
+        for l in logs:
+            st.write(f"- **[{l['status']}]** R{l['round']} · {l['tool_area']}: "
+                     f"{(l['ai_output'] or '')[:70]}")
+            if l["audit_i"]:
+                st.caption(f"   Test designed: {l['audit_i'][:80]}")

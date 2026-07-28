@@ -349,3 +349,229 @@ PIVOT_DECISIONS = [
     "Rejected",
     "RandomChange",
 ]
+
+# --------------------------------------------------------------------------- #
+# Weekly curriculum — the simulation builds in complexity as new concepts are
+# introduced. Each week: concepts taught in the FIRST class session, then the
+# SECOND session is the simulation round applying them. Objectives frame what
+# students should be able to do; `tool` names the app page that becomes central.
+# --------------------------------------------------------------------------- #
+WEEKLY_CURRICULUM = {
+    1: {
+        "title": "Founder formation",
+        "concepts": ["Entrepreneurial opportunity vs. idea", "Founder means & constraints",
+                     "Effectuation: bird-in-hand"],
+        "objectives": ["Inventory your team's means (who you are, what you know, whom you know).",
+                        "Distinguish an opportunity territory from a product idea.",
+                        "Frame decisions as constrained by money, time, and capability."],
+        "class_focus": "What an entrepreneurial opportunity is, and why means come before ideas.",
+        "sim_task": "Review your founder card and territory; set up your team.",
+        "tool": "Founder & Opportunity",
+    },
+    2: {
+        "title": "Opportunity framing",
+        "concepts": ["Opportunity portfolio", "Customer segment hypotheses",
+                     "Opportunity scoring"],
+        "objectives": ["Generate at least three candidate ventures inside your territory.",
+                        "Score options on importance, fit, access, evidence, and affordability.",
+                        "Choose deliberately rather than committing to the first idea."],
+        "class_focus": "Comparing multiple opportunities before committing.",
+        "sim_task": "Add and score 3+ candidate ventures on the Founder & Opportunity page.",
+        "tool": "Founder & Opportunity",
+    },
+    3: {
+        "title": "Customer discovery",
+        "concepts": ["Customer jobs, pains, gains", "Problem interviews",
+                     "Behavior vs. opinion"],
+        "objectives": ["Build a first Customer Profile (jobs/pains/gains).",
+                        "Run problem interviews that surface behavior, not opinions.",
+                        "Log interview evidence on the ladder."],
+        "class_focus": "The customer side of the Value Proposition Canvas; interview technique.",
+        "sim_task": "Create Customer Profile v1; log interview evidence.",
+        "tool": "Canvases",
+    },
+    4: {
+        "title": "Customer evidence",
+        "concepts": ["Evidence quality & strength", "Pattern vs. contradiction",
+                     "Unsupported beliefs"],
+        "objectives": ["Separate strong behavioral evidence from weak opinion.",
+                        "Revise the Customer Profile from real findings.",
+                        "Flag beliefs you still cannot support."],
+        "class_focus": "What counts as credible customer evidence.",
+        "sim_task": "Save Customer Profile v2 driven by evidence; grow the Evidence Ledger.",
+        "tool": "Evidence Ledger",
+    },
+    5: {
+        "title": "Value creation",
+        "concepts": ["Products & services", "Pain relievers", "Gain creators"],
+        "objectives": ["Draft the value-map side of the VPC.",
+                        "Create at least three competing value propositions.",
+                        "Tie each reliever/creator to a specific pain/gain."],
+        "class_focus": "The value-map side of the Value Proposition Canvas.",
+        "sim_task": "Build VPC v1 and add 3+ propositions to the VP Auction.",
+        "tool": "Canvases",
+    },
+    6: {
+        "title": "Value proposition fit",
+        "concepts": ["Problem–solution fit", "Prioritization",
+                     "Confidence vs. evidence"],
+        "objectives": ["Assess fit between value map and customer profile.",
+                        "Allocate Venture Tokens to reveal confidence.",
+                        "Redirect toward evidence to avoid the overconfidence tax."],
+        "class_focus": "Judging fit and prioritizing the most important elements.",
+        "sim_task": "Run a VP Auction round; record a fit assessment.",
+        "tool": "VP Auction",
+    },
+    7: {
+        "title": "Business-model architecture",
+        "concepts": ["Nine BMC blocks", "Block interdependence",
+                     "Value capture"],
+        "objectives": ["Construct a complete Business Model Canvas.",
+                        "Trace dependencies between blocks.",
+                        "Respond coherently to a market event that breaks one block."],
+        "class_focus": "The nine blocks of the Business Model Canvas and how they connect.",
+        "sim_task": "Build BMC v1; respond to your first market event.",
+        "tool": "Canvases",
+    },
+    8: {
+        "title": "Assumption testing",
+        "concepts": ["Desirability, feasibility, viability, adaptability",
+                     "Assumption mapping", "Importance × evidence"],
+        "objectives": ["Convert canvas elements into ranked assumptions.",
+                        "Identify the assumptions that could destroy the venture.",
+                        "Decide what to test and what to defer, with consequences."],
+        "class_focus": "The four risk types and prioritizing what to test.",
+        "sim_task": "Build the Assumption Map; mark the riskiest untested beliefs.",
+        "tool": "Assumption Map",
+    },
+    9: {
+        "title": "Experiment design",
+        "concepts": ["Hypotheses & metrics", "Success/failure thresholds",
+                     "Decision rules", "Experiment cost"],
+        "objectives": ["Design experiments with pre-set thresholds.",
+                        "Match experiment type to assumption and risk type.",
+                        "Spend limited resources on the highest-learning tests."],
+        "class_focus": "Turning assumptions into falsifiable experiments.",
+        "sim_task": "Purchase and design experiment cards for your top assumptions.",
+        "tool": "Experiment Marketplace",
+    },
+    10: {
+        "title": "Market testing",
+        "concepts": ["Minimum viable experiments", "Evidence strength",
+                     "Learning per dollar"],
+        "objectives": ["Execute experiments and record honest results.",
+                        "Update assumptions to Supported/Refuted.",
+                        "Measure learning efficiency."],
+        "class_focus": "Running MVEs and interpreting evidence.",
+        "sim_task": "Record experiment results; log resulting evidence.",
+        "tool": "Experiment Marketplace",
+    },
+    11: {
+        "title": "Pivot decisions",
+        "concepts": ["Pivot, persevere, or stop", "Evidence-based change",
+                     "Sunk-cost discipline"],
+        "objectives": ["Decide whether contradictory evidence warrants a pivot.",
+                        "File a disciplined pivot petition.",
+                        "Rebuild the canvas while keeping it coherent (BMC v2)."],
+        "class_focus": "What makes a pivot disciplined rather than random.",
+        "sim_task": "Submit a Pivot Petition; save BMC v2 if approved.",
+        "tool": "Pivot Petition",
+    },
+    12: {
+        "title": "Business economics",
+        "concepts": ["Revenue & cost structure", "Pricing", "Unit economics", "Contribution margin"],
+        "objectives": ["Test pricing and willingness to pay.",
+                        "Compute contribution economics.",
+                        "Judge whether the model can be viable."],
+        "class_focus": "Revenue, costs, pricing, channels, and unit economics.",
+        "sim_task": "Run a pricing test; capture an economic viability model in the BMC.",
+        "tool": "Experiment Marketplace",
+    },
+    13: {
+        "title": "Scaling and competition",
+        "concepts": ["Channels & partners", "Key resources/activities", "Defensibility"],
+        "objectives": ["Respond to competitor moves and capacity limits.",
+                        "Strengthen channels, resources, activities, and partners.",
+                        "Articulate why the model is defensible."],
+        "class_focus": "Scaling the model and defending it against competition.",
+        "sim_task": "Update the BMC into a scaling plan; handle competitive events.",
+        "tool": "Canvases",
+    },
+    14: {
+        "title": "Investment readiness",
+        "concepts": ["Evidence narrative", "Business-model coherence", "Due diligence"],
+        "objectives": ["Assemble a coherent evidence narrative.",
+                        "Anticipate adversarial investor questions.",
+                        "Draft an investment memorandum."],
+        "class_focus": "Building an evidence-based investment case.",
+        "sim_task": "Prepare your investment memo; stress-test coherence.",
+        "tool": "Dashboard",
+    },
+    15: {
+        "title": "Venture market (Evidence Exchange)",
+        "concepts": ["Business-model defense", "Remaining uncertainty", "Next experiment"],
+        "objectives": ["Defend the model with evidence, not advocacy.",
+                        "State honestly what remains an assumption.",
+                        "Propose the next most valuable experiment."],
+        "class_focus": "The final defense: what you know, how you know it, what's next.",
+        "sim_task": "Assemble the final evidence portfolio; present at the Evidence Exchange.",
+        "tool": "Dashboard",
+    },
+}
+
+# Which week each student tool is INTRODUCED. Tools remain usable earlier, but the
+# app flags early access so complexity is added deliberately, week by week.
+PAGE_UNLOCK_WEEK = {
+    "Round Briefing": 1,
+    "Founder & Opportunity": 1,
+    "AI Assist Log": 1,
+    "Decision Journal": 1,
+    "Canvases": 3,
+    "Evidence Ledger": 3,
+    "VP Auction": 5,
+    "Market Events": 7,
+    "Assumption Map": 8,
+    "Experiment Marketplace": 9,
+    "Pivot Petition": 11,
+    "Dashboard": 1,
+}
+
+# --------------------------------------------------------------------------- #
+# Generative-AI assist + verification methodology
+#
+# Students are expected to use generative AI every round. AI output is treated as
+# founder OPINION (evidence strength 0) until it survives the AUDIT check and is
+# translated into real-world evidence. This keeps the "evidence over advocacy"
+# principle intact even when AI produces fluent, confident text.
+# --------------------------------------------------------------------------- #
+AI_AUDIT_STEPS = [
+    ("A", "Assumptions surfaced",
+     "What must be TRUE for this AI suggestion to hold? List the hidden assumptions."),
+    ("U", "Unsupported claims flagged",
+     "Which parts are asserted as fact but have no evidence? Mark confident-but-unproven claims."),
+    ("D", "Data & sources checked",
+     "Did the AI cite verifiable sources? Check for hallucinated facts, outdated data, and bias."),
+    ("I", "Independent test designed",
+     "What is the cheapest real-world test (interview, prototype, landing page) to verify it?"),
+    ("T", "Translate to evidence",
+     "After testing, what evidence strength (0–10) resulted? Update the ledger accordingly."),
+]
+
+AI_STATUS_OPTIONS = ["Unverified", "Verified", "Rejected", "Modified"]
+
+AI_TOOL_AREAS = [
+    "Customer Profile", "Value Proposition", "Business Model", "Assumptions",
+    "Experiment design", "Pricing / economics", "Pivot reasoning", "Investor narrative", "Other",
+]
+
+AI_PROTOCOL_SUMMARY = (
+    "**Generative AI is allowed every round — but AI output is not evidence.** Treat any AI "
+    "suggestion as founder opinion (strength 0) until it passes the **AUDIT** check and you "
+    "translate it into real-world evidence:\n\n"
+    "- **A — Assumptions surfaced**: what must be true for this to hold?\n"
+    "- **U — Unsupported claims flagged**: which parts are confident but unproven?\n"
+    "- **D — Data & sources checked**: hallucinations, stale data, bias?\n"
+    "- **I — Independent test designed**: cheapest way to verify with real customers?\n"
+    "- **T — Translate to evidence**: what strength did the real test produce?\n\n"
+    "Log every AI use on the **AI Assist Log** page and mark it Verified only after a real test."
+)

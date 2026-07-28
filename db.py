@@ -217,6 +217,23 @@ CREATE TABLE IF NOT EXISTS vp_results (
     created_at     TEXT,
     FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS ai_logs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_id       INTEGER NOT NULL,
+    round         INTEGER,
+    tool_area     TEXT,
+    prompt        TEXT,
+    ai_output     TEXT,
+    audit_a       TEXT,   -- Assumptions surfaced
+    audit_u       TEXT,   -- Unsupported claims flagged
+    audit_d       TEXT,   -- Data & sources checked
+    audit_i       TEXT,   -- Independent test designed
+    audit_t       TEXT,   -- Translate to evidence
+    status        TEXT DEFAULT 'Unverified',
+    created_at    TEXT,
+    FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
+);
 """
 
 
@@ -825,5 +842,61 @@ def list_vp_results(team_id=None):
                 "SELECT * FROM vp_results WHERE team_id=? ORDER BY id DESC", (team_id,)
             ).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# Generative-AI assist logs (AUDIT verification)
+# --------------------------------------------------------------------------- #
+def add_ai_log(team_id, data):
+    conn = get_conn()
+    try:
+        conn.execute(
+            """INSERT INTO ai_logs(team_id, round, tool_area, prompt, ai_output,
+                audit_a, audit_u, audit_d, audit_i, audit_t, status, created_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (team_id, data.get("round", 1), data.get("tool_area", ""),
+             data.get("prompt", ""), data.get("ai_output", ""),
+             data.get("audit_a", ""), data.get("audit_u", ""), data.get("audit_d", ""),
+             data.get("audit_i", ""), data.get("audit_t", ""),
+             data.get("status", "Unverified"), now()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_ai_logs(team_id=None):
+    conn = get_conn()
+    try:
+        if team_id is None:
+            rows = conn.execute("SELECT * FROM ai_logs ORDER BY id DESC").fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM ai_logs WHERE team_id=? ORDER BY id DESC", (team_id,)
+            ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def update_ai_log(log_id, **fields):
+    if not fields:
+        return
+    conn = get_conn()
+    try:
+        cols = ", ".join(f"{k}=?" for k in fields)
+        conn.execute(f"UPDATE ai_logs SET {cols} WHERE id=?", (*fields.values(), log_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_ai_log(log_id):
+    conn = get_conn()
+    try:
+        conn.execute("DELETE FROM ai_logs WHERE id=?", (log_id,))
+        conn.commit()
     finally:
         conn.close()

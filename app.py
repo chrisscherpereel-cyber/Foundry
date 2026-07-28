@@ -92,6 +92,7 @@ def landing():
 # Student shell
 # --------------------------------------------------------------------------- #
 STUDENT_PAGES = {
+    "Round Briefing": vs.round_briefing,
     "Dashboard": vs.dashboard,
     "Founder & Opportunity": vs.founder_opportunity,
     "Canvases": vs.canvases,
@@ -101,8 +102,19 @@ STUDENT_PAGES = {
     "Evidence Ledger": vs.evidence,
     "Market Events": vs.market_events,
     "Pivot Petition": vs.pivots,
+    "AI Assist Log": vs.ai_assist,
     "Decision Journal": vs.reflections,
 }
+
+
+def _student_page_label(page):
+    """Annotate a page with the week it's introduced; lock icon if not yet reached."""
+    wk = content.PAGE_UNLOCK_WEEK.get(page)
+    if not wk:
+        return page
+    if db.current_round() < wk:
+        return f"🔒 {page} · wk {wk}"
+    return f"{page} · wk {wk}"
 
 
 def student_shell():
@@ -117,7 +129,9 @@ def student_shell():
         st.header(f"🎓 {team['name']}")
         st.caption(f"Round {db.current_round()} · {team['stage']}")
         st.metric("Credits", f"{team['evidence_credits']:.1f}")
-        page = st.radio("Go to", list(STUDENT_PAGES.keys()))
+        page = st.radio("Go to", list(STUDENT_PAGES.keys()),
+                        format_func=_student_page_label)
+        st.caption("🔒 = tool is introduced in a later week (still explorable).")
         with st.expander("Rotating team roles"):
             for role, desc in content.TEAM_ROLES:
                 st.caption(f"**{role}** — {desc}")
