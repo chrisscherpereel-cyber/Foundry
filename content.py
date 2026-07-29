@@ -550,6 +550,93 @@ DEFAULT_TOTAL_ROUNDS = len(CURRICULUM_TOPICS)
 CANVAS_TYPES = ["customer_profile", "vpc", "bmc"]
 
 # --------------------------------------------------------------------------- #
+# Round deliverables — the concrete things a team must complete to finish a round.
+# Each has a `check` id the app evaluates against the team's saved work, the `tool`
+# where it's done, and `must_update` (True = a new/changed artifact is required
+# this round; False = informational).
+# --------------------------------------------------------------------------- #
+TOPIC_DELIVERABLES = {
+    "founder_formation": [
+        {"label": "Review your founder card and opportunity territory",
+         "check": "always", "tool": "Founder & Opportunity", "must_update": False},
+    ],
+    "opportunity_framing": [
+        {"label": "Add and score at least 3 candidate ventures",
+         "check": "ventures_ge_3", "tool": "Founder & Opportunity", "must_update": True},
+    ],
+    "customer_discovery": [
+        {"label": "Save Customer Profile v1 (jobs / pains / gains)",
+         "check": "cp_ge_1", "tool": "Canvases", "must_update": True},
+        {"label": "Log at least 2 pieces of customer evidence",
+         "check": "evidence_ge_2", "tool": "Evidence Ledger", "must_update": True},
+    ],
+    "customer_evidence": [
+        {"label": "Revise the Customer Profile to v2 from real evidence",
+         "check": "cp_ge_2", "tool": "Canvases", "must_update": True},
+        {"label": "Grow the Evidence Ledger to at least 4 items",
+         "check": "evidence_ge_4", "tool": "Evidence Ledger", "must_update": True},
+    ],
+    "value_creation": [
+        {"label": "Save Value Proposition Canvas v1",
+         "check": "vpc_ge_1", "tool": "Canvases", "must_update": True},
+        {"label": "Add at least 3 competing value propositions",
+         "check": "vps_ge_3", "tool": "VP Auction", "must_update": True},
+    ],
+    "value_prop_fit": [
+        {"label": "Run a VP Auction round (allocate your tokens)",
+         "check": "vp_results_ge_1", "tool": "VP Auction", "must_update": True},
+    ],
+    "bmc_architecture": [
+        {"label": "Build Business Model Canvas v1 (fill all 9 blocks)",
+         "check": "bmc_ge_1", "tool": "Canvases", "must_update": True},
+    ],
+    "assumption_testing": [
+        {"label": "Map at least 5 assumptions and flag the riskiest",
+         "check": "assumptions_ge_5", "tool": "Assumption Map", "must_update": True},
+    ],
+    "experiment_design": [
+        {"label": "Design at least 2 experiments with pre-set thresholds",
+         "check": "experiments_ge_2", "tool": "Experiment Marketplace", "must_update": True},
+    ],
+    "market_testing": [
+        {"label": "Record results for at least 1 experiment",
+         "check": "experiment_results_ge_1", "tool": "Experiment Marketplace", "must_update": True},
+    ],
+    "pivot_decisions": [
+        {"label": "Submit a Pivot Petition (or justify persevering)",
+         "check": "pivots_ge_1", "tool": "Pivot Petition", "must_update": True},
+        {"label": "Save Business Model Canvas v2",
+         "check": "bmc_ge_2", "tool": "Canvases", "must_update": True},
+    ],
+    "business_economics": [
+        {"label": "Run a pricing or preorder test",
+         "check": "pricing_exp", "tool": "Experiment Marketplace", "must_update": True},
+    ],
+    "scaling": [
+        {"label": "Update the BMC into a scaling plan (new version)",
+         "check": "bmc_ge_3", "tool": "Canvases", "must_update": True},
+    ],
+    "investment_readiness": [
+        {"label": "Draft your investment memo (as this round's reflection)",
+         "check": "reflection_this_round", "tool": "Decision Journal", "must_update": True},
+    ],
+    "venture_market": [
+        {"label": "Assemble your final evidence portfolio (as this round's reflection)",
+         "check": "reflection_this_round", "tool": "Decision Journal", "must_update": True},
+    ],
+}
+
+# Applies to every round in addition to the topic deliverables.
+UNIVERSAL_DELIVERABLE = {
+    "label": "Each member submits a Decision Journal reflection",
+    "check": "reflection_this_round", "tool": "Decision Journal", "must_update": True,
+}
+
+# Tools that are always editable regardless of the round's focus.
+ALWAYS_ACTIVE_TOOLS = ["Round Briefing", "Inbox", "Dashboard",
+                       "Decision Journal", "AI Assist Log"]
+
+# --------------------------------------------------------------------------- #
 # Generative-AI assist + verification methodology
 #
 # Students are expected to use generative AI every round. AI output is treated as

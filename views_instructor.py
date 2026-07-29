@@ -428,6 +428,14 @@ def round_control():
         if st.button("Update PIN", help="Save the new instructor PIN."):
             db.set_setting("instructor_pin", pin)
             st.success("PIN updated.")
+        strict = st.checkbox(
+            "Strict round mode", value=logic.strict_round_mode(),
+            help="When on, students can only edit tools relevant to the current round; tools "
+                 "from other rounds are view-only, and not-yet-introduced tools are locked. "
+                 "Turn off to let teams edit any unlocked tool anytime.")
+        if st.button("Save round mode"):
+            logic.set_auto_flag("strict_round_mode", strict)
+            st.success("Round mode saved.")
 
     st.divider()
     topics = logic.topics_for_round(cur)

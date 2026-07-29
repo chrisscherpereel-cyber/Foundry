@@ -44,7 +44,7 @@ first run and holds all cohort state (survives restarts).
 
 **🎓 Team (student)** — enter with the join code:
 
-- **Round Briefing** — the starting point each round: this round's learning objectives, the concepts introduced in class, the specific simulation task, which tool to use, and what's newly unlocked. Includes the full round-by-round arc so students see how complexity builds.
+- **Round Briefing** — the starting point each round: learning objectives, concepts, tasks, and a **shaded completion checklist** ("To finish Round N — x/y complete") where amber items must still be done and green items are done. It also spells out **what must change this round** vs. **what can remain** (carried forward), and what's locked. Includes the full round-by-round arc.
 - **Inbox** — an in-app "email" inbox that receives a per-round **venture review** from the Director/Auto-Director (strengths, focus areas, risks, next steps). Unread messages show a 🔵 badge in the sidebar.
 - **Dashboard** — resources, live venture valuation, performance dimensions, and a warning list of high-importance untested assumptions.
 - **Founder & Opportunity** — your founder card and territory; log ≥3 candidate ventures scored on importance, fit, access, evidence availability, affordability.
@@ -71,7 +71,7 @@ each topic sits in that schedule — so everything follows your reordering autom
 - **Cover all material in fewer rounds, balanced** — a round can hold several topics, so the full 15-topic curriculum fits into however many rounds the class meets (e.g. all 15 in 7). The app **auto-balances by logical content** — a contiguous, even-load split so no round is heavier than another — and shows a suggested arrangement you can apply or override.
 - **Add / remove / move material** — freely reassign topics between rounds by hand; unlocks and canvas staging recompute to match. Unplaced topics wait in an Unassigned pool.
 - **Timed advancement** — set a date/time per round; the sim auto-advances to that round the next time the app is loaded after the time passes (no background server required).
-- **Guided, not hard-locked** — the student **Round Briefing** and the Director's **Round Control** surface the current round's objectives, concepts, task, and newly unlocked tools. In the student sidebar each tool is labelled with the round it's introduced; tools reached later show a 🔒 and a gentle "introduced in Round N" banner but stay explorable.
+- **Round-gated tools (Strict round mode, default on)** — students can only *edit* tools relevant to the current round. Not-yet-introduced tools are **🔒 locked** (view-only lock screen); previously-used tools that aren't part of this round are **👁️ reference-only** (visible, edits disabled) so work carries forward without being changed; the round's active tools are editable and show a shaded "Required on this page this round" checklist. The Director can turn Strict round mode off on **Round Control** to let teams edit any unlocked tool anytime.
 - The default arc runs founder/opportunity formation → customer discovery → value proposition → business model → assumptions → experiments → market testing → pivots → economics → scaling → investment defense.
 
 ## Generative AI + the AUDIT verification methodology

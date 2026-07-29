@@ -131,18 +131,19 @@ STUDENT_PAGES = {
 
 
 def _make_student_label(team):
-    """Build a sidebar label function: unlock-round annotation + Inbox unread badge."""
+    """Sidebar labels: lock/reference state + round tag + Inbox unread badge."""
     unread = db.unread_count(team["id"])
+    rnd = db.current_round()
 
     def label(page):
-        if page == "Inbox" and unread:
-            return f"Inbox 🔵{unread}"
-        wk = logic.page_unlock_round(page)
-        if not wk or wk <= 1:
-            return page
-        if db.current_round() < wk:
-            return f"🔒 {page} · R{wk}"
-        return f"{page} · R{wk}"
+        if page == "Inbox":
+            return f"Inbox 🔵{unread}" if unread else "Inbox"
+        state = logic.tool_state(page, rnd)
+        if state == "locked":
+            return f"🔒 {page} · R{logic.page_unlock_round(page)}"
+        if state == "reference" and logic.strict_round_mode():
+            return f"👁️ {page}"
+        return page
 
     return label
 
@@ -161,7 +162,7 @@ def student_shell():
         st.metric("Credits", f"{team['evidence_credits']:.1f}")
         page = st.radio("Go to", list(STUDENT_PAGES.keys()),
                         format_func=_make_student_label(team))
-        st.caption("🔒 = tool is introduced in a later round (still explorable).")
+        st.caption("🔒 locked (opens later) · 👁️ reference-only this round · others are active.")
         with st.expander("Rotating team roles"):
             for role, desc in content.TEAM_ROLES:
                 st.caption(f"**{role}** — {desc}")

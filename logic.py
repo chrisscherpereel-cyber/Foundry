@@ -214,6 +214,118 @@ def canvas_focus_for_round(rnd):
     return focuses
 
 
+# --------------------------------------------------------------------------- #
+# Round deliverables, completion, and tool gating
+# --------------------------------------------------------------------------- #
+def _deliverable_done(team_id, check, rnd):
+    if check == "always":
+        return True
+    if check == "ventures_ge_3":
+        return len(db.get_ventures(team_id)) >= 3
+    if check == "cp_ge_1":
+        return len(db.list_canvases(team_id, "customer_profile")) >= 1
+    if check == "cp_ge_2":
+        return len(db.list_canvases(team_id, "customer_profile")) >= 2
+    if check == "vpc_ge_1":
+        return len(db.list_canvases(team_id, "vpc")) >= 1
+    if check == "bmc_ge_1":
+        return len(db.list_canvases(team_id, "bmc")) >= 1
+    if check == "bmc_ge_2":
+        return len(db.list_canvases(team_id, "bmc")) >= 2
+    if check == "bmc_ge_3":
+        return len(db.list_canvases(team_id, "bmc")) >= 3
+    if check == "evidence_ge_2":
+        return len(db.list_evidence(team_id)) >= 2
+    if check == "evidence_ge_4":
+        return len(db.list_evidence(team_id)) >= 4
+    if check == "vps_ge_3":
+        return len(db.list_value_props(team_id)) >= 3
+    if check == "vp_results_ge_1":
+        return len(db.list_vp_results(team_id)) >= 1
+    if check == "assumptions_ge_5":
+        return len(db.list_assumptions(team_id)) >= 5
+    if check == "experiments_ge_2":
+        return len(db.list_experiments(team_id)) >= 2
+    if check == "experiment_results_ge_1":
+        return any(e["outcome"] in ("Supported", "Refuted")
+                   for e in db.list_experiments(team_id))
+    if check == "pricing_exp":
+        return any(("price" in (e["card_type"] or "").lower()
+                    or "preorder" in (e["card_type"] or "").lower())
+                   for e in db.list_experiments(team_id))
+    if check == "pivots_ge_1":
+        return len(db.list_pivots(team_id)) >= 1
+    if check == "reflection_this_round":
+        return any(r["round"] == rnd for r in db.list_reflections(team_id))
+    if check == "ai_log_this_round":
+        return any(l["round"] == rnd for l in db.list_ai_logs(team_id))
+    return False
+
+
+def round_requirements(rnd):
+    """Deliverables a team must complete to finish this round (de-duplicated)."""
+    reqs, seen = [], set()
+    for tp in topics_for_round(rnd):
+        for d in content.TOPIC_DELIVERABLES.get(tp["key"], []):
+            if d["label"] not in seen:
+                seen.add(d["label"])
+                reqs.append(d)
+    u = content.UNIVERSAL_DELIVERABLE
+    if u["label"] not in seen:
+        reqs.append(u)
+    return reqs
+
+
+def round_progress(team_id, rnd):
+    """Each requirement with a computed done/not-done flag."""
+    return [{**d, "done": _deliverable_done(team_id, d["check"], rnd)}
+            for d in round_requirements(rnd)]
+
+
+def round_complete(team_id, rnd):
+    prog = round_progress(team_id, rnd)
+    return all(p["done"] for p in prog) if prog else True
+
+
+def strict_round_mode():
+    """When on (default), tools not relevant to the current round are view-only."""
+    return auto_flag("strict_round_mode", default=True)
+
+
+def active_tools(rnd):
+    """Student tools that are editable/relevant this round."""
+    tools = set(content.ALWAYS_ACTIVE_TOOLS)
+    for tp in topics_for_round(rnd):
+        if tp.get("tool"):
+            tools.add(tp["tool"])
+        for p in tp.get("introduces", []):
+            tools.add(p)
+        if tp.get("canvas"):
+            tools.add("Canvases")
+        for d in content.TOPIC_DELIVERABLES.get(tp["key"], []):
+            if d.get("tool"):
+                tools.add(d["tool"])
+    return tools
+
+
+def tool_state(page, rnd):
+    """'locked' (not introduced), 'active' (relevant now), or 'reference' (past)."""
+    if page_unlock_round(page) > rnd:
+        return "locked"
+    if page in active_tools(rnd):
+        return "active"
+    return "reference"
+
+
+def tool_editable(page, rnd):
+    state = tool_state(page, rnd)
+    if state == "locked":
+        return False
+    if state == "reference":
+        return not strict_round_mode()
+    return True
+
+
 def _parse_dt(text):
     if not text:
         return None

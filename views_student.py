@@ -53,15 +53,56 @@ def _refresh_team(team_id):
     return db.get_team(team_id)
 
 
-def _unlock_notice(page_name):
-    """Soft progressive-complexity banner: tools stay usable, but we flag early access."""
-    wk = logic.page_unlock_round(page_name)
-    cur = db.current_round()
-    if wk and cur < wk:
-        st.warning(
-            f"🔒 This tool is formally introduced in **Round {wk}** — its concepts are taught "
-            f"then. You're in Round {cur}, so feel free to explore, but the guided sequence "
-            f"reaches it in Round {wk}.")
+def _shade_row(label, done, must_update):
+    """One shaded checklist row (green = done, amber = required-incomplete)."""
+    if done:
+        bg, border, icon = "#e7f4ea", "#34a853", "✅"
+    else:
+        bg, border, icon = "#fdf1d6", "#f5a623", "⬜"
+    tag = " <span style='color:#b26a00;font-weight:600;'>· must complete this round</span>" \
+        if (must_update and not done) else ""
+    return ("<div style='background:%s;border-left:4px solid %s;padding:6px 10px;"
+            "margin:4px 0;border-radius:4px;'>%s %s%s</div>" % (bg, border, icon, label, tag))
+
+
+def _render_checklist(items):
+    """Render a shaded checklist from [{label, done, must_update}] as one HTML block."""
+    html = "".join(_shade_row(i["label"], i["done"], i.get("must_update", False)) for i in items)
+    st.markdown(html, unsafe_allow_html=True)
+
+
+def _page_requirements(page, team):
+    """Shaded 'required this round' box for the requirements tied to this page."""
+    rnd = db.current_round()
+    prog = [p for p in logic.round_progress(team["id"], rnd) if p.get("tool") == page]
+    if prog:
+        st.markdown("**✅ Required on this page this round**")
+        _render_checklist(prog)
+
+
+def _round_gate(page, team):
+    """Enforce round alignment on a tool page.
+
+    Returns (editable: bool). Locked tools show a lock screen and stop; reference
+    tools (introduced but not relevant this round, strict mode) become view-only.
+    Also shades this page's required deliverables when active.
+    """
+    rnd = db.current_round()
+    state = logic.tool_state(page, rnd)
+    if state == "locked":
+        wk = logic.page_unlock_round(page)
+        st.warning(f"🔒 **Locked.** This tool is introduced in **Round {wk}**. "
+                   f"You're in Round {rnd}. It will open when its concepts are taught.")
+        st.stop()
+    editable = logic.tool_editable(page, rnd)
+    if state == "reference" and not editable:
+        st.info("👁️ **Reference only this round.** This tool isn't part of the current round's "
+                "task, so editing is disabled to keep everyone focused. Your existing work is "
+                "shown below and carries forward. (Your instructor can re-enable edits by "
+                "turning off Strict round mode.)")
+    elif state == "active":
+        _page_requirements(page, team)
+    return editable
 
 
 def _ai_check_notice():
@@ -110,6 +151,43 @@ def round_briefing(team):
             for c in tp["concepts"]:
                 st.markdown(f"- {c}")
         st.success(f"**🎯 Task:** {tp['sim_task']}  ·  **Go to:** *{tp['tool']}*")
+
+    # ---- Completion checklist (shaded) --------------------------------------
+    st.divider()
+    prog = logic.round_progress(team["id"], cur)
+    done_n = sum(1 for p in prog if p["done"])
+    complete = done_n == len(prog)
+    st.write(f"### ✅ To finish Round {cur} — {done_n}/{len(prog)} complete")
+    if complete:
+        st.success("All required deliverables are complete for this round. 🎉")
+    else:
+        st.caption("Amber items must be completed this round. Green items are done.")
+    _render_checklist(prog)
+
+    # ---- What must change vs. what can remain -------------------------------
+    tool_pages = ["Founder & Opportunity", "Canvases", "VP Auction", "Assumption Map",
+                  "Experiment Marketplace", "Evidence Ledger", "Market Events",
+                  "Pivot Petition"]
+    reference = [p for p in tool_pages if logic.tool_state(p, cur) == "reference"]
+    locked = [p for p in tool_pages if logic.tool_state(p, cur) == "locked"]
+    must_change = sorted({p["tool"] for p in prog if p.get("must_update") and not p["done"]})
+    cc1, cc2 = st.columns(2)
+    with cc1:
+        st.markdown("**✍️ Must change this round**")
+        if must_change:
+            for t in must_change:
+                st.markdown(f"- {t}")
+        else:
+            st.caption("Nothing outstanding — you're up to date.")
+    with cc2:
+        st.markdown("**📌 Can remain (carried forward)**")
+        if reference:
+            for t in reference:
+                st.markdown(f"- {t} — no change needed unless new evidence says so")
+        else:
+            st.caption("—")
+    if locked:
+        st.caption("🔒 Not yet available: " + ", ".join(locked))
 
     # What unlocks this round (excluding base tools already available)
     newly = [p for p in logic.newly_unlocked(cur) if p not in content.BASE_TOOLS]
@@ -266,6 +344,7 @@ def dashboard(team):
 # --------------------------------------------------------------------------- #
 def founder_opportunity(team):
     st.subheader("🧭 Founder & Opportunity Formation")
+    editable = _round_gate("Founder & Opportunity", team)
     _guide(
         "You are founders newly accepted into the Venture Foundry accelerator. You do NOT "
         "start with a product — you start with a broad **opportunity territory** and a "
@@ -319,7 +398,7 @@ def founder_opportunity(team):
             st.write(f"**Evidence availability:** {v.get('evidence','—')}/5")
             st.write(f"**Experiment affordability:** {v.get('afford','—')}/5")
             st.write(f"**Notes:** {v.get('notes','')}")
-            if st.button("Remove", key=f"rmv_{i}",
+            if st.button("Remove", key=f"rmv_{i}", disabled=not editable,
                          help="Delete this candidate venture."):
                 ventures.pop(i)
                 db.set_ventures(team["id"], ventures)
@@ -356,7 +435,7 @@ def founder_opportunity(team):
             "Notes",
             help="Anything else worth remembering about this option — risks, ideas, "
                  "who to talk to.")
-        if st.form_submit_button("Add venture",
+        if st.form_submit_button("Add venture", disabled=not editable,
                                  help="Save this candidate venture to your list.") and name:
             ventures.append({"name": name, "importance": importance, "fit": fit,
                              "access": access, "evidence": evidence, "afford": afford,
@@ -478,7 +557,7 @@ def _bmc_layout(ctype, val):
 
 def canvases(team):
     st.subheader("🗂️ Canvases")
-    _unlock_notice("Canvases")
+    editable = _round_gate("Canvases", team)
     cur = db.current_round()
     cp_wk = logic.canvas_unlock_round("customer_profile")
     vpc_wk = logic.canvas_unlock_round("vpc")
@@ -551,7 +630,7 @@ def canvases(team):
             "What changed / why (evidence-driven?)",
             help="One line on what you changed and what evidence prompted it. This is graded — "
                  "it shows your thinking evolved for a reason.")
-        if st.form_submit_button(f"Save new {title} version",
+        if st.form_submit_button(f"Save new {title} version", disabled=not editable,
                                  help="Store the current boxes as a new dated version."):
             v = db.save_canvas(team["id"], ctype, data, vlabel, note)
             st.success(f"Saved {title} version {v}.")
@@ -574,7 +653,7 @@ def canvases(team):
 # --------------------------------------------------------------------------- #
 def assumptions(team):
     st.subheader("🎯 Assumption Map & Market")
-    _unlock_notice("Assumption Map")
+    editable = _round_gate("Assumption Map", team)
     _guide(
         "Every box on your canvases hides an assumption — something that must be TRUE for the "
         "venture to work. Here you list those assumptions and rank them. The simulation "
@@ -618,7 +697,7 @@ def assumptions(team):
         testability = c4.slider(
             "Testability", 1, 5, 3,
             help="How easily can you test this cheaply and quickly? 5 = very easy to test.")
-        if st.form_submit_button("Add assumption",
+        if st.form_submit_button("Add assumption", disabled=not editable,
                                  help="Save this assumption to your map.") and text:
             db.add_assumption(team["id"], text, risk, importance, evidence_level, testability)
             st.success("Assumption added.")
@@ -651,11 +730,11 @@ def assumptions(team):
                      "(risky if it's important).",
             )
             cc1, cc2 = st.columns(2)
-            if cc1.button("Update status", key=f"aupd_{a['id']}",
+            if cc1.button("Update status", key=f"aupd_{a['id']}", disabled=not editable,
                           help="Save the status you selected."):
                 db.update_assumption(a["id"], status=new_status)
                 st.rerun()
-            if cc2.button("Delete", key=f"adel_{a['id']}",
+            if cc2.button("Delete", key=f"adel_{a['id']}", disabled=not editable,
                           help="Remove this assumption."):
                 db.delete_assumption(a["id"])
                 st.rerun()
@@ -666,7 +745,7 @@ def assumptions(team):
 # --------------------------------------------------------------------------- #
 def experiments(team):
     st.subheader("🧪 Experiment Marketplace")
-    _unlock_notice("Experiment Marketplace")
+    editable = _round_gate("Experiment Marketplace", team)
     _guide(
         "This is where you buy tests for your assumptions. Each experiment card costs money, "
         "hours, and Evidence Credits, and gives evidence of a certain strength. The key "
@@ -740,7 +819,7 @@ def experiments(team):
             placeholder="If supported, build clickable prototype; if refuted, revisit segment",
             help="What you will actually DO depending on the outcome.")
         submitted = st.form_submit_button(
-            "Purchase & design experiment",
+            "Purchase & design experiment", disabled=not editable,
             help="Deducts the cost and saves the experiment. The assumption becomes 'Testing.'")
         if submitted:
             if assum_id is None:
@@ -780,7 +859,7 @@ def experiments(team):
                 key=f"outc_{e['id']}",
                 help="Compare the result to your thresholds. Supported/Refuted will auto-update "
                      "the linked assumption. Inconclusive = the test didn't settle it.")
-            if st.button("Save result", key=f"saveres_{e['id']}",
+            if st.button("Save result", key=f"saveres_{e['id']}", disabled=not editable,
                          help="Store the result and update the linked assumption."):
                 db.update_experiment(e["id"], result=result, outcome=outcome)
                 if e["assumption_id"] and outcome in ("Supported", "Refuted"):
@@ -794,7 +873,7 @@ def experiments(team):
 # --------------------------------------------------------------------------- #
 def evidence(team):
     st.subheader("📒 Evidence Ledger")
-    _unlock_notice("Evidence Ledger")
+    editable = _round_gate("Evidence Ledger", team)
     _guide(
         "This is your proof file and your income source. Every time you gather real evidence, "
         "log it here. The simulation pays you Evidence Credits equal to the evidence's strength "
@@ -841,7 +920,7 @@ def evidence(team):
         else:
             assum_id = None
         if st.form_submit_button(
-                "Log evidence",
+                "Log evidence", disabled=not editable,
                 help="Records the evidence and pays you credits equal to its strength.") and description:
             award, strength = logic.log_evidence_and_award(
                 team["id"], description, etype, source, assum_id)
@@ -872,7 +951,7 @@ def evidence(team):
 # --------------------------------------------------------------------------- #
 def vp_auction(team):
     st.subheader("💠 Value Proposition Auction")
-    _unlock_notice("VP Auction")
+    editable = _round_gate("VP Auction", team)
     _guide(
         f"You created several value propositions — now show which you back most. You have "
         f"{content.VENTURE_TOKEN_POOL} Venture Tokens to spread across them. Betting big on an "
@@ -912,11 +991,12 @@ def vp_auction(team):
                 help="How strongly does real evidence back this proposition? 0 = pure hope, "
                      "10 = customers are paying. Be honest — the Director can override it.")
             c1, c2 = st.columns(2)
-            if c1.button("Update evidence", key=f"vpupd_{p['id']}",
+            if c1.button("Update evidence", key=f"vpupd_{p['id']}", disabled=not editable,
                          help="Save the evidence-support level you set."):
                 db.update_value_prop(p["id"], evidence_strength=new_ev)
                 st.rerun()
-            if c2.button("Delete", key=f"vpdel_{p['id']}", help="Remove this proposition."):
+            if c2.button("Delete", key=f"vpdel_{p['id']}", disabled=not editable,
+                         help="Remove this proposition."):
                 db.delete_value_prop(p["id"])
                 st.rerun()
 
@@ -931,7 +1011,7 @@ def vp_auction(team):
         ev = st.slider(
             "Evidence support (0–10)", 0, 10, 0,
             help="Start at 0 if untested. Raise it only as real evidence comes in.")
-        if st.form_submit_button("Add proposition",
+        if st.form_submit_button("Add proposition", disabled=not editable,
                                  help="Save this proposition to the auction.") and name:
             db.add_value_prop(team["id"], name, desc, ev)
             st.rerun()
@@ -973,7 +1053,7 @@ def vp_auction(team):
         pc4.metric("Net credits", preview["net"],
                    help="Dividend minus tax. This is applied when you submit.")
         st.caption("Preview only — nothing is charged until you submit.")
-        if st.button("Submit auction round", type="primary",
+        if st.button("Submit auction round", type="primary", disabled=not editable,
                      help="Locks in this allocation and applies the net credit change."):
             res = logic.run_vp_auction(team["id"], allocations, db.current_round())
             if res.get("committed"):
@@ -1004,7 +1084,7 @@ def vp_auction(team):
 # --------------------------------------------------------------------------- #
 def market_events(team):
     st.subheader("📡 Market Events")
-    _unlock_notice("Market Events")
+    _round_gate("Market Events", team)
     _guide(
         "Each round the Director introduces a market event — a competitor move, a rule change, "
         "a cost shock. These aren't random punishments: each one targets an assumption hidden "
@@ -1035,7 +1115,7 @@ def market_events(team):
 # --------------------------------------------------------------------------- #
 def pivots(team):
     st.subheader("🔀 Pivot Petition")
-    _unlock_notice("Pivot Petition")
+    editable = _round_gate("Pivot Petition", team)
     _guide(
         "A pivot is a deliberate change of direction backed by evidence — not just swapping to "
         "a new idea because the old one struggled. You can't simply declare a pivot; you file a "
@@ -1079,7 +1159,7 @@ def pivots(team):
         needed = st.text_area(
             "Evidence required to support the new direction",
             help="What evidence would prove the new direction works?")
-        if st.form_submit_button("Submit pivot petition",
+        if st.form_submit_button("Submit pivot petition", disabled=not editable,
                                  help="Send this to the investment committee for a decision."):
             if not original or not change:
                 st.error("Original assumption and proposed change are required.")
