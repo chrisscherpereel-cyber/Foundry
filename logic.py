@@ -662,15 +662,52 @@ def _raw_scores(team_id):
     return raw
 
 
-def auto_scores(team_id, weights=None):
+# Each dashboard dimension only becomes fair to score once the tool it depends on
+# has been introduced. This keeps Auto-Director recommendations aligned with the
+# options actually available in a given round.
+_DIMENSION_TOOL = {
+    "Customer Insight": "Canvases",
+    "Value Proposition Fit": "VP Auction",
+    "Evidence Strength": "Evidence Ledger",
+    "Experiment Efficiency": "Experiment Marketplace",
+    "Financial Viability": "Experiment Marketplace",
+    "Adaptability": "Pivot Petition",
+    "Responsible Innovation": None,   # AI Assist is a base tool (always available)
+    "Team Execution": None,           # Decision Journal is a base tool
+}
+
+
+def dimension_available(dim, round_no):
+    """Is a dashboard dimension 'in play' (its tool introduced) by this round?"""
+    if dim == "Business-Model Coherence":
+        return round_no >= canvas_unlock_round("bmc")
+    if dim == "Investor Confidence":
+        return round_no >= canvas_unlock_round("bmc")   # needs a business model to judge
+    page = _DIMENSION_TOOL.get(dim)
+    return page is None or round_no >= page_unlock_round(page)
+
+
+def available_dimensions(round_no):
+    """Dimensions whose underlying tool has been introduced by this round."""
+    return [d for d in content.DIMENSION_NAMES if dimension_available(d, round_no)]
+
+
+def auto_scores(team_id, weights=None, round_no=None, only_available=True):
     """Predict 0–100 dashboard scores from a team's submitted work.
 
     Each dimension's raw heuristic score is multiplied by the Director's tunable
-    weight (default 1.0) and clamped to 0–100.
+    weight (default 1.0) and clamped to 0–100. When `round_no` is given and
+    `only_available` is True, only dimensions whose tools are introduced by that
+    round are returned — so recommendations match what teams could actually do.
     """
     raw = _raw_scores(team_id)
     weights = weights or get_score_weights()
-    return {dim: _clamp100(raw[dim] * weights.get(dim, 1.0)) for dim in content.DIMENSION_NAMES}
+    scores = {dim: _clamp100(raw[dim] * weights.get(dim, 1.0))
+              for dim in content.DIMENSION_NAMES}
+    if round_no is not None and only_available:
+        avail = set(available_dimensions(round_no))
+        scores = {d: v for d, v in scores.items() if d in avail}
+    return scores
 
 
 def valuation_from_scores(team_id, scores):
@@ -756,7 +793,7 @@ def generate_feedback(team_id, round_no=None, scores=None):
     """
     team = db.get_team(team_id)
     rnd = round_no or db.current_round()
-    scores = scores or auto_scores(team_id)
+    scores = scores or auto_scores(team_id, round_no=rnd)  # only dimensions in play
     ev = evidence_summary(team_id)
     risk = assumption_risk_report(team_id)
 
@@ -840,22 +877,24 @@ def run_autopilot(round_no=None, teams=None):
     """
     rnd = round_no or db.current_round()
     teams = teams if teams is not None else db.list_teams()
+    events_open = rnd >= page_unlock_round("Market Events")
+    pivots_open = rnd >= page_unlock_round("Pivot Petition")
     summary = []
     for t in teams:
         entry = {"team": t["name"], "team_id": t["id"], "scored": False,
                  "event": None, "pivots": 0}
         if auto_flag("auto_scoring_on"):
-            sc = auto_scores(t["id"])
+            sc = auto_scores(t["id"], round_no=rnd)   # only dimensions in play this round
             apply_scores(t["id"], rnd, sc)
             entry["scored"] = True
-        if auto_flag("auto_events_on"):
+        if auto_flag("auto_events_on") and events_open:
             existing = [e for e in db.list_events(t["id"], include_broadcast=False)
                         if e["round"] == rnd]
             if not existing:
                 ev = suggest_event(t["id"], rnd)
                 db.add_event(t["id"], rnd, ev["category"], ev["text"], ev["exposes"])
                 entry["event"] = ev["category"]
-        if auto_flag("auto_pivots_on"):
+        if auto_flag("auto_pivots_on") and pivots_open:
             for p in db.list_pivots(t["id"]):
                 if p["status"] == "Submitted":
                     dec, note = recommend_pivot(p)

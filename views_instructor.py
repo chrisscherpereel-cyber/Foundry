@@ -121,44 +121,57 @@ def auto_director():
         st.success("Applied enabled automation to all teams.")
         st.rerun()
 
+    avail = logic.available_dimensions(rnd)
+    not_yet = [d for d in content.DIMENSION_NAMES if d not in avail]
+    st.caption(f"In play this round: {', '.join(avail)}."
+               + (f"  Not yet introduced: {', '.join(not_yet)}." if not_yet else ""))
+    events_open = rnd >= logic.page_unlock_round("Market Events")
+    pivots_open = rnd >= logic.page_unlock_round("Pivot Petition")
+
     # ---- Per-team suggestions with override ---------------------------------
     for t in teams:
-        sc = logic.auto_scores(t["id"])
+        sc = logic.auto_scores(t["id"], round_no=rnd)   # only in-play dimensions
         pred_val = logic.valuation_from_scores(t["id"], sc)
         with st.expander(f"{t['name']} — predicted valuation ${pred_val:,.0f}"):
-            st.markdown("**Predicted dashboard scores** (override any, then apply)")
+            st.markdown("**Predicted dashboard scores** (only dimensions in play this round)")
             overrides = {}
+            in_play = [(dim, m) for dim, m in content.DASHBOARD_DIMENSIONS if dim in sc]
             cols = st.columns(2)
-            for i, (dim, _meaning) in enumerate(content.DASHBOARD_DIMENSIONS):
+            for i, (dim, _meaning) in enumerate(in_play):
                 with cols[i % 2]:
                     overrides[dim] = st.slider(dim, 0, 100, int(sc[dim]),
                                                key=f"auto_sc_{t['id']}_{dim}")
-            if st.button("Apply scores", key=f"auto_apply_sc_{t['id']}"):
+            if not in_play:
+                st.caption("No scored dimensions are in play yet at this round.")
+            if in_play and st.button("Apply scores", key=f"auto_apply_sc_{t['id']}"):
                 logic.apply_scores(t["id"], rnd, overrides)
                 st.success(f"Scores applied to {t['name']} for Round {rnd}.")
                 st.rerun()
 
-            # Suggested event
+            # Suggested event (only once market events are introduced)
             st.markdown("**Suggested market event**")
-            ev = logic.suggest_event(t["id"], rnd)
-            st.caption(ev["reason"])
-            ecat = st.selectbox(
-                "Category", list(content.MARKET_EVENTS.keys()),
-                index=list(content.MARKET_EVENTS.keys()).index(ev["category"]),
-                key=f"auto_ecat_{t['id']}")
-            opts = content.MARKET_EVENTS[ecat]
-            # Try to keep the suggested text if still in the chosen category.
-            texts = [o[0] for o in opts]
-            default_i = texts.index(ev["text"]) if ev["text"] in texts else 0
-            eidx = st.selectbox("Event", range(len(opts)),
-                                format_func=lambda i, o=opts: o[i][0],
-                                index=default_i, key=f"auto_eidx_{t['id']}")
-            etext, eexp = opts[eidx]
-            st.caption(f"Exposes: {eexp}")
-            if st.button("Issue this event", key=f"auto_issue_{t['id']}"):
-                db.add_event(t["id"], rnd, ecat, etext, eexp)
-                st.success(f"Event issued to {t['name']}.")
-                st.rerun()
+            if not events_open:
+                st.caption(f"Market events are introduced in Round "
+                           f"{logic.page_unlock_round('Market Events')} — none suggested yet.")
+            else:
+                ev = logic.suggest_event(t["id"], rnd)
+                st.caption(ev["reason"])
+                ecat = st.selectbox(
+                    "Category", list(content.MARKET_EVENTS.keys()),
+                    index=list(content.MARKET_EVENTS.keys()).index(ev["category"]),
+                    key=f"auto_ecat_{t['id']}")
+                opts = content.MARKET_EVENTS[ecat]
+                texts = [o[0] for o in opts]
+                default_i = texts.index(ev["text"]) if ev["text"] in texts else 0
+                eidx = st.selectbox("Event", range(len(opts)),
+                                    format_func=lambda i, o=opts: o[i][0],
+                                    index=default_i, key=f"auto_eidx_{t['id']}")
+                etext, eexp = opts[eidx]
+                st.caption(f"Exposes: {eexp}")
+                if st.button("Issue this event", key=f"auto_issue_{t['id']}"):
+                    db.add_event(t["id"], rnd, ecat, etext, eexp)
+                    st.success(f"Event issued to {t['name']}.")
+                    st.rerun()
 
             # Feedback email — preview & send
             st.markdown("**Feedback email (venture review)**")
@@ -173,9 +186,9 @@ def auto_director():
                 logic.send_feedback(t["id"], rnd, sc)
                 st.success(f"Feedback sent to {t['name']}.")
 
-            # Pending pivots
+            # Pending pivots (only once pivots are introduced)
             pend = [p for p in db.list_pivots(t["id"]) if p["status"] == "Submitted"]
-            if pend:
+            if pend and pivots_open:
                 st.markdown("**Pending pivot petitions**")
                 for p in pend:
                     dec, note = logic.recommend_pivot(p)

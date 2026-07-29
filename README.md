@@ -33,7 +33,8 @@ first run and holds all cohort state (survives restarts).
 - **Dashboard Scoring** — score the ten performance dimensions 0–100 per round.
 - **Cohort Overview** — leaderboard across teams plus inspection of each team's canvases, assumptions, experiments, and reflections.
 - **🤖 Auto-Director** — automates the Director's per-round decisions from each team's actual submitted work, with full override:
-  - **Predicted dashboard scores** (0–100) derived from canvases, evidence ledger, experiments, assumptions, the VP auction, and AI logs — every dimension has a transparent heuristic.
+  - **Round-aligned** — recommendations only cover what's actually available that round: a dimension is scored only once the tool it depends on has been introduced, events aren't suggested until Market Events is introduced, and pivot recommendations wait until pivots are unlocked. (These follow the schedule, so they recompute if you reorder topics.)
+  - **Predicted dashboard scores** (0–100) derived from canvases, evidence ledger, experiments, assumptions, the VP auction, and AI logs — every dimension has a transparent heuristic, and only in-play dimensions are shown/scored.
   - **Suggested market event** aimed at each team's biggest untested high-risk assumption (risk type → event category), with a stated reason.
   - **Recommended pivot decision** for each pending petition (Approved / Conditional / NeedsEvidence / Rejected) based on the evidence and completeness of the petition.
   - **Predicted valuation** shown per team before anything is applied.
