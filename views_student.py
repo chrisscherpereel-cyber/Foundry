@@ -74,7 +74,9 @@ def _render_checklist(items):
 def _page_requirements(page, team):
     """Shaded 'required this round' box for the requirements tied to this page."""
     rnd = db.current_round()
-    prog = [p for p in logic.round_progress(team["id"], rnd) if p.get("tool") == page]
+    cl = logic.round_checklist(team["id"], rnd)
+    prog = [p for p in (cl["decisions"] + cl["questions"] + cl["carried"])
+            if p.get("tool") == page and not p["done"]]
     if prog:
         st.markdown("**✅ Required on this page this round**")
         _render_checklist(prog)
@@ -88,13 +90,13 @@ def _round_gate(page, team):
     Also shades this page's required deliverables when active.
     """
     rnd = db.current_round()
-    state = logic.tool_state(page, rnd)
+    state = logic.tool_state(page, rnd, team["id"])
     if state == "locked":
         wk = logic.page_unlock_round(page)
         st.warning(f"🔒 **Locked.** This tool is introduced in **Round {wk}**. "
                    f"You're in Round {rnd}. It will open when its concepts are taught.")
         st.stop()
-    editable = logic.tool_editable(page, rnd)
+    editable = logic.tool_editable(page, rnd, team["id"])
     if state == "reference" and not editable:
         st.info("👁️ **Reference only this round.** This tool isn't part of the current round's "
                 "task, so editing is disabled to keep everyone focused. Your existing work is "
@@ -152,25 +154,44 @@ def round_briefing(team):
                 st.markdown(f"- {c}")
         st.success(f"**🎯 Task:** {tp['sim_task']}  ·  **Go to:** *{tp['tool']}*")
 
+    # ---- Explore this round's concepts --------------------------------------
+    concepts = logic.round_concepts(cur)
+    if concepts:
+        with st.expander("📚 Explore this round's concepts (definitions + prompts)"):
+            for c in concepts:
+                defn, prompt = content.concept_help(c)
+                st.markdown(f"**{c}** — {defn}")
+                st.caption(f"➡️ {prompt}")
+            st.caption("Answer these on the **Concept Check** page to cover each concept.")
+
     # ---- Completion checklist (shaded) --------------------------------------
     st.divider()
-    prog = logic.round_progress(team["id"], cur)
-    done_n = sum(1 for p in prog if p["done"])
-    complete = done_n == len(prog)
-    st.write(f"### ✅ To finish Round {cur} — {done_n}/{len(prog)} complete")
+    cl = logic.round_checklist(team["id"], cur)
+    all_items = cl["decisions"] + cl["questions"] + cl["carried"]
+    done_n = sum(1 for p in all_items if p["done"])
+    complete = done_n == len(all_items)
+    st.write(f"### ✅ To finish Round {cur} — {done_n}/{len(all_items)} complete")
     if complete:
-        st.success("All required deliverables are complete for this round. 🎉")
+        st.success("Everything for this round is complete — decisions made and concepts covered. 🎉")
     else:
-        st.caption("Amber items must be completed this round. Green items are done.")
-    _render_checklist(prog)
+        st.caption("Amber items must be completed this round. Green items are done. "
+                   "Every concept is covered either by a decision or by answering its question.")
+
+    st.markdown("**Decisions to make (actions in the tools)**")
+    _render_checklist(cl["decisions"])
+    st.markdown("**Concepts to cover (answer on the Concept Check page)**")
+    _render_checklist(cl["questions"])
+    if cl["carried"]:
+        st.markdown("**⏪ Carried over from earlier rounds — finish these now**")
+        _render_checklist([{**c, "label": f"(R{c['round']}) {c['label']}"} for c in cl["carried"]])
 
     # ---- What must change vs. what can remain -------------------------------
     tool_pages = ["Founder & Opportunity", "Canvases", "VP Auction", "Assumption Map",
                   "Experiment Marketplace", "Evidence Ledger", "Market Events",
                   "Pivot Petition"]
-    reference = [p for p in tool_pages if logic.tool_state(p, cur) == "reference"]
-    locked = [p for p in tool_pages if logic.tool_state(p, cur) == "locked"]
-    must_change = sorted({p["tool"] for p in prog if p.get("must_update") and not p["done"]})
+    reference = [p for p in tool_pages if logic.tool_state(p, cur, team["id"]) == "reference"]
+    locked = [p for p in tool_pages if logic.tool_state(p, cur, team["id"]) == "locked"]
+    must_change = sorted({p["tool"] for p in all_items if p.get("must_update") and not p["done"]})
     cc1, cc2 = st.columns(2)
     with cc1:
         st.markdown("**✍️ Must change this round**")
@@ -246,6 +267,110 @@ def inbox(team):
             if cols[1].button("Delete", key=f"msgdel_{m['id']}"):
                 db.delete_message(m["id"])
                 st.rerun()
+
+
+# --------------------------------------------------------------------------- #
+# Concept Check — cover every concept with a short answer (question coverage)
+# --------------------------------------------------------------------------- #
+def concept_check(team):
+    st.subheader("🧠 Concept Check")
+    _guide(
+        "To finish a round, every concept introduced that round must be covered — either by a "
+        "decision you make in the tools, or by answering its question here. Write a sentence or "
+        "two for each concept explaining how it applies to YOUR venture. This guarantees no "
+        "concept is skipped, even ones without a hands-on task.",
+        terms=[
+            ("Concept check", "A short answer showing you understand and applied a concept."),
+            ("Coverage", "A concept is 'covered' once you've answered it (or made the matching "
+             "decision)."),
+        ],
+    )
+    cur = db.current_round()
+    concepts = logic.round_concepts(cur)
+    if not concepts:
+        st.info("No concepts assigned to this round yet.")
+        return
+    st.caption("Each concept below has a short definition and a prompt to explore. Read it, then "
+               "write how it applies to your venture. You can use generative AI to explore — just "
+               "verify it (see the AI Assist Log).")
+    answers = db.get_round_answers(team["id"], cur)
+    with st.form("concept_form"):
+        new = {}
+        for c in concepts:
+            done = bool((answers.get(c) or "").strip())
+            defn, prompt = content.concept_help(c)
+            with st.container(border=True):
+                st.markdown(f"{'✅' if done else '⬜'} **{c}**")
+                st.caption(f"📖 {defn}")
+                new[c] = st.text_area(f"➡️ {prompt}", value=answers.get(c, ""),
+                                      key=f"concept_{cur}_{c}",
+                                      help="Answer in a sentence or two, grounded in your venture.")
+        if st.form_submit_button("Save concept answers"):
+            for c, ans in new.items():
+                db.set_round_answer(team["id"], cur, c, ans)
+            st.success("Answers saved.")
+            st.rerun()
+
+    prog = logic.concept_progress(team["id"], cur)
+    done_n = sum(1 for p in prog if p["done"])
+    st.caption(f"{done_n}/{len(prog)} concepts covered this round.")
+
+    # Show any unanswered concepts carried over from earlier rounds.
+    carried = [c for c in logic.outstanding_prior(team["id"], cur) if c.get("kind") == "question"]
+    if carried:
+        st.divider()
+        st.markdown("**⏪ Concepts still open from earlier rounds — answer these too**")
+        with st.form("concept_carry_form"):
+            cnew = {}
+            for c in carried:
+                cnew[(c["round"], c["concept"])] = st.text_area(
+                    f"(R{c['round']}) {c['concept']}", key=f"cc_{c['round']}_{c['concept']}")
+            if st.form_submit_button("Save carried-over answers"):
+                for (r, concept), ans in cnew.items():
+                    if ans.strip():
+                        db.set_round_answer(team["id"], r, concept, ans)
+                st.success("Saved.")
+                st.rerun()
+
+
+# --------------------------------------------------------------------------- #
+# Founder Skills — what the team has, and training it up
+# --------------------------------------------------------------------------- #
+def founder_skills(team):
+    st.subheader("🛠️ Founder Skills")
+    _guide(
+        "These are your team's capabilities. Each skill has a clear meaning and a real effect "
+        "in the simulation — higher skills raise the matching performance dimension and help "
+        "the related work. Your starting levels come from your founder card. You can TRAIN a "
+        "skill up by investing founder-hours; higher levels cost more hours, so choose where to "
+        "build strength.",
+        terms=[
+            ("Skill level", "0 (none) to 5 (expert). Shown as the bar below."),
+            ("Effect", "What the skill does in the sim — see each skill's note."),
+            ("Training", "Spend founder-hours to raise a skill by one level."),
+        ],
+    )
+    team = _refresh_team(team["id"])
+    st.metric("Founder-hours available (used to train)", f"{team['founder_hours']:.0f}")
+    skills = db.get_team_skills(team["id"])
+
+    st.write("### What your team has")
+    for s in content.FOUNDER_SKILLS:
+        lvl = skills.get(s["key"], 0)
+        with st.container(border=True):
+            c1, c2 = st.columns([3, 1])
+            c1.markdown(f"**{s['name']}** — level {lvl}/{content.SKILL_MAX}")
+            c1.progress(lvl / content.SKILL_MAX)
+            c1.caption(f"_{s['definition']}_")
+            c1.caption(f"Effect: {s['effect']}  ·  Supports **{s['dimension']}**.")
+            if lvl >= content.SKILL_MAX:
+                c2.success("Maxed")
+            else:
+                cost = logic.skill_train_cost(lvl)
+                if c2.button(f"Train +1\n({cost} hrs)", key=f"train_{s['key']}"):
+                    ok, msg = logic.train_skill(team["id"], s["key"])
+                    (st.success if ok else st.error)(msg)
+                    st.rerun()
 
 
 # --------------------------------------------------------------------------- #
@@ -385,9 +510,20 @@ def founder_opportunity(team):
     st.write(f"### Opportunity territory\n**{team['opportunity'] or '—'}**")
 
     st.divider()
+    if db.has_ack(team["id"], "founder_review"):
+        st.success("✅ Your team has marked the founder card & territory as reviewed.")
+    else:
+        st.info("Round 1 task: read your founder card, skills, and territory above with your "
+                "whole team, then confirm you've reviewed them.")
+        if st.button("✔ Mark founder card & territory as reviewed", disabled=not editable):
+            db.set_ack(team["id"], "founder_review")
+            st.rerun()
+
+    st.divider()
     st.write("### Candidate ventures")
-    st.caption("Generate at least three possible ventures and compare them before "
-               "committing. Opportunity selection is a constrained decision, not free brainstorming.")
+    st.caption("Generating and scoring at least three ventures is the **Opportunity framing** "
+               "task (typically Round 2). You can start jotting ideas now; comparing them "
+               "deliberately is a constrained decision, not free brainstorming.")
 
     ventures = db.get_ventures(team["id"])
     for i, v in enumerate(ventures):

@@ -127,6 +127,64 @@ DIFFICULTY_LEVELS = {
 }
 
 # --------------------------------------------------------------------------- #
+# Founder / team skills — structured capabilities the team holds and can grow.
+# Each skill has a DEFINITION (what it means to have it) and an EFFECT (what it
+# does in the simulation). A team's starting levels come from its founder card;
+# teams can train skills up over the semester by investing founder-hours.
+# --------------------------------------------------------------------------- #
+SKILL_MAX = 5
+
+FOUNDER_SKILLS = [
+    {"key": "customer_research", "name": "Customer Research", "dimension": "Customer Insight",
+     "definition": "Finding, interviewing, and interpreting customers to uncover their real "
+                   "jobs, pains, and gains — and telling behavior from opinion.",
+     "effect": "Raises your Customer Insight and the credibility of interview evidence."},
+    {"key": "design", "name": "Design & Prototyping", "dimension": "Value Proposition Fit",
+     "definition": "Shaping offers and building prototypes that clearly communicate a value "
+                   "proposition to customers.",
+     "effect": "Raises Value Proposition Fit and makes prototype experiments more convincing."},
+    {"key": "technical", "name": "Technical / Engineering", "dimension": "Business-Model Coherence",
+     "definition": "Building the product and judging whether the technology can actually work "
+                   "and be delivered reliably.",
+     "effect": "Supports feasibility claims and strengthens business-model coherence."},
+    {"key": "sales", "name": "Sales & Growth", "dimension": "Value Proposition Fit",
+     "definition": "Reaching customers through channels and turning interest into real "
+                   "commitments (trials, LOIs, preorders).",
+     "effect": "Strengthens channel/sales experiments and willingness-to-pay evidence."},
+    {"key": "finance", "name": "Finance & Unit Economics", "dimension": "Financial Viability",
+     "definition": "Modeling pricing, costs, margins, and cash so the venture can capture "
+                   "value and stay solvent.",
+     "effect": "Raises Financial Viability and sharpens pricing-test interpretation."},
+    {"key": "operations", "name": "Operations", "dimension": "Experiment Efficiency",
+     "definition": "Running experiments and delivering reliably within limited time and budget.",
+     "effect": "Improves Experiment Efficiency and delivery reliability."},
+    {"key": "responsible", "name": "Responsible Innovation", "dimension": "Responsible Innovation",
+     "definition": "Spotting privacy, fairness, trust, and stakeholder risks early and "
+                   "addressing them responsibly.",
+     "effect": "Raises Responsible Innovation and softens ethical/regulatory event penalties."},
+]
+FOUNDER_SKILL_KEYS = [s["key"] for s in FOUNDER_SKILLS]
+FOUNDER_SKILL_BY_KEY = {s["key"]: s for s in FOUNDER_SKILLS}
+
+# Starting skill levels (0–5) by founder-card archetype. Unlisted skills default to 1.
+FOUNDER_CARD_SKILLS = {
+    "Design & Social Founders": {"design": 4, "sales": 3, "customer_research": 2, "technical": 0},
+    "Technical Founders": {"technical": 4, "operations": 3, "sales": 1, "customer_research": 1},
+    "Operations Founders": {"operations": 4, "finance": 2, "technical": 2, "design": 1},
+    "Domain-Expert Founders": {"customer_research": 4, "responsible": 3, "technical": 0, "finance": 1},
+    "Growth & Sales Founders": {"sales": 4, "customer_research": 2, "design": 2, "finance": 1},
+    "Finance-Minded Founders": {"finance": 4, "operations": 2, "customer_research": 1},
+    "Balanced Founders": {k: 2 for k in FOUNDER_SKILL_KEYS},
+}
+
+
+def card_skill_levels(card_name):
+    """Starting skill levels for a founder card (defaults to 1 for unlisted skills)."""
+    overrides = FOUNDER_CARD_SKILLS.get(card_name, {})
+    return {k: int(overrides.get(k, 1)) for k in FOUNDER_SKILL_KEYS}
+
+
+# --------------------------------------------------------------------------- #
 # Evidence-strength ladder — behavior beats opinion
 # --------------------------------------------------------------------------- #
 EVIDENCE_LADDER = [
@@ -370,8 +428,8 @@ PIVOT_DECISIONS = [
 # --------------------------------------------------------------------------- #
 
 # Tools available from the very first round regardless of topic order.
-BASE_TOOLS = ["Round Briefing", "Inbox", "Dashboard", "Founder & Opportunity",
-              "AI Assist Log", "Decision Journal"]
+BASE_TOOLS = ["Round Briefing", "Inbox", "Concept Check", "Dashboard",
+              "Founder & Opportunity", "Founder Skills", "AI Assist Log", "Decision Journal"]
 
 CURRICULUM_TOPICS = [
     {
@@ -557,8 +615,8 @@ CANVAS_TYPES = ["customer_profile", "vpc", "bmc"]
 # --------------------------------------------------------------------------- #
 TOPIC_DELIVERABLES = {
     "founder_formation": [
-        {"label": "Review your founder card and opportunity territory",
-         "check": "always", "tool": "Founder & Opportunity", "must_update": False},
+        {"label": "Review your founder card & territory, then mark it reviewed",
+         "check": "ack_founder_review", "tool": "Founder & Opportunity", "must_update": True},
     ],
     "opportunity_framing": [
         {"label": "Add and score at least 3 candidate ventures",
@@ -633,8 +691,184 @@ UNIVERSAL_DELIVERABLE = {
 }
 
 # Tools that are always editable regardless of the round's focus.
-ALWAYS_ACTIVE_TOOLS = ["Round Briefing", "Inbox", "Dashboard",
-                       "Decision Journal", "AI Assist Log"]
+ALWAYS_ACTIVE_TOOLS = ["Round Briefing", "Inbox", "Concept Check", "Dashboard",
+                       "Founder Skills", "Decision Journal", "AI Assist Log"]
+
+# --------------------------------------------------------------------------- #
+# Concept library — a short definition and an "explore it" prompt for every
+# concept in the curriculum, so students have something to learn from before
+# they answer the concept check.
+# --------------------------------------------------------------------------- #
+CONCEPT_LIBRARY = {
+    "Entrepreneurial opportunity vs. idea":
+        ("An idea is a product you imagine; an opportunity is a real, important customer problem "
+         "worth solving. Founders chase opportunities, not just ideas.",
+         "Name the opportunity behind one idea you have — whose problem is it, and why does it matter?"),
+    "Founder means & constraints":
+        ("Effectuation's 'bird in hand': you start from who you are, what you know, and whom you "
+         "know — plus your limits on money, time, and skills.",
+         "List your team's means and your hard limits (budget you can lose, hours, skills)."),
+    "Effectuation: bird-in-hand":
+        ("Expert entrepreneurs start with available means and affordable loss rather than a fixed "
+         "goal and predicted returns.",
+         "What could you start testing this week using only what you already have?"),
+    "Opportunity portfolio":
+        ("Holding several possible ventures at once, instead of committing to the first idea, so "
+         "you can compare them.",
+         "Sketch three different ventures inside your territory."),
+    "Customer segment hypotheses":
+        ("A guess about which specific group of customers you'll serve first — stated so it can be "
+         "checked.",
+         "Who exactly is your first customer? Be specific enough to go find five of them."),
+    "Opportunity scoring":
+        ("Comparing options on importance, founder fit, access, evidence availability, and "
+         "affordability instead of gut feel.",
+         "Score your candidate ventures on those five factors and see which leads."),
+    "Customer jobs, pains, gains":
+        ("Jobs = what the customer is trying to get done; pains = bad outcomes/obstacles; gains = "
+         "wanted benefits. The customer side of the VPC.",
+         "For your segment, write two jobs, two pains, and two gains from real observation."),
+    "Problem interviews":
+        ("Conversations that explore the customer's world and past behavior — not a pitch of your "
+         "solution.",
+         "Draft three behavior-focused questions ('tell me about the last time…')."),
+    "Behavior vs. opinion":
+        ("What people DO predicts far better than what they SAY they would do. Behavioral evidence "
+         "outranks opinion.",
+         "Which of your findings are behavior, and which are just opinions?"),
+    "Evidence quality & strength":
+        ("Evidence sits on a ladder from founder opinion (weak) to paying customers (strong). "
+         "Weight it accordingly.",
+         "Rate your strongest and weakest piece of evidence on the ladder."),
+    "Pattern vs. contradiction":
+        ("Look for repeated signals across customers (patterns) and for findings that contradict "
+         "your beliefs.",
+         "What pattern have you seen 3+ times? What evidence contradicts a belief you held?"),
+    "Unsupported beliefs":
+        ("Claims you are treating as true but have no evidence for yet — the riskiest part of a "
+         "plan.",
+         "List two things you currently believe but cannot yet support."),
+    "Products & services":
+        ("The concrete things you offer that help customers get a job done — the value-map side of "
+         "the VPC.",
+         "List the products/services in your value proposition."),
+    "Pain relievers":
+        ("How your offer removes or reduces a specific customer pain.",
+         "Match each pain reliever to an actual customer pain."),
+    "Gain creators":
+        ("How your offer produces a specific gain the customer wants.",
+         "Match each gain creator to an actual customer gain."),
+    "Problem–solution fit":
+        ("Evidence that customers have the problem AND that your proposition addresses it — before "
+         "you scale.",
+         "What would convince a skeptic you have problem–solution fit?"),
+    "Prioritization":
+        ("Focusing scarce time/money on the few elements that matter most.",
+         "Which single element of your value proposition matters most to test first?"),
+    "Confidence vs. evidence":
+        ("Feeling sure is not the same as being right. Bets should follow evidence, not enthusiasm.",
+         "Where is your confidence highest but your evidence weakest?"),
+    "Nine BMC blocks":
+        ("Segments, value propositions, channels, relationships, revenue, resources, activities, "
+         "partners, costs — the whole business on one page.",
+         "Fill each block with your current best hypothesis."),
+    "Block interdependence":
+        ("The nine blocks depend on each other — change one and others must change to stay coherent.",
+         "If your main channel doubled in cost, which other blocks change?"),
+    "Value capture":
+        ("Creating value isn't enough; the model must also capture some of it as revenue.",
+         "How does your model capture value, and is it defensible?"),
+    "Desirability, feasibility, viability, adaptability":
+        ("The four risk lenses: do they want it (desirability), can we build it (feasibility), does "
+         "the money work (viability), will it last (adaptability)?",
+         "Name your biggest risk in each of the four categories."),
+    "Assumption mapping":
+        ("Turning every part of the model into a testable assumption and ranking them by importance "
+         "and evidence.",
+         "What assumption, if false, would collapse the whole venture?"),
+    "Importance × evidence":
+        ("Test first what is most important AND least supported by evidence.",
+         "Which assumption scores highest on importance × (lack of) evidence?"),
+    "Hypotheses & metrics":
+        ("A hypothesis is a specific, falsifiable prediction; a metric is the number you'll measure "
+         "to judge it.",
+         "Write one hypothesis with the exact metric you'd measure."),
+    "Success/failure thresholds":
+        ("The result lines that define success vs. failure — set BEFORE running the test so you "
+         "can't move the goalposts.",
+         "Set a success and a failure threshold for your next test."),
+    "Decision rules":
+        ("What you'll actually DO for each outcome: persevere, pivot, or stop.",
+         "Write the decision rule for your next experiment."),
+    "Experiment cost":
+        ("Every test costs money, time, and credits — spend on the highest learning per dollar.",
+         "Which cheap test would teach you the most right now?"),
+    "Minimum viable experiments":
+        ("The smallest test that still produces credible evidence about an assumption.",
+         "What's the smallest test that could disprove your riskiest assumption?"),
+    "Evidence strength":
+        ("Behavioral, committed evidence (trials, LOIs, payment) beats stated intent.",
+         "How would you upgrade one weak piece of evidence to a stronger kind?"),
+    "Learning per dollar":
+        ("Judge experiments by how much uncertainty they remove per unit of money and time.",
+         "Which experiment gave you the most learning per dollar so far?"),
+    "Pivot, persevere, or stop":
+        ("Three honest responses to evidence: keep going, change direction, or stop.",
+         "Given your evidence, which of the three is warranted — and why?"),
+    "Evidence-based change":
+        ("A pivot is a disciplined change justified by evidence, not a reaction to frustration.",
+         "What evidence would justify a pivot for you?"),
+    "Sunk-cost discipline":
+        ("Past effort already spent should not keep you in a losing direction.",
+         "Is any belief you hold propped up mainly by effort you've already invested?"),
+    "Revenue & cost structure":
+        ("Where money comes from and where it goes — the financial backbone of the model.",
+         "List your main revenue streams and your dominant costs."),
+    "Pricing":
+        ("What customers are willing to pay, tested with real behavior, not guesses.",
+         "How could you test willingness to pay this round?"),
+    "Unit economics":
+        ("The per-customer math: revenue minus the cost to serve and acquire them.",
+         "Estimate revenue and cost for one customer."),
+    "Contribution margin":
+        ("What's left from a sale after variable costs — it must eventually cover fixed costs.",
+         "Roughly, what's your contribution margin per sale?"),
+    "Channels & partners":
+        ("How you reach and deliver to customers, and who helps you do it.",
+         "Which channel and which partner is your model most dependent on?"),
+    "Key resources/activities":
+        ("The assets and the things you must do well for the model to work.",
+         "What one resource or activity is most critical — and most at risk?"),
+    "Defensibility":
+        ("Why a competitor can't easily copy or undercut you.",
+         "What makes your position hard to copy?"),
+    "Evidence narrative":
+        ("A clear story of what you know, how you know it, and what's still assumption.",
+         "In three sentences, what do you know and how do you know it?"),
+    "Business-model coherence":
+        ("All nine blocks reinforce each other and the evidence, with no contradictions.",
+         "Where is your model still internally inconsistent?"),
+    "Due diligence":
+        ("The adversarial questioning investors use to probe your claims.",
+         "What's the hardest question an investor could ask you?"),
+    "Business-model defense":
+        ("Defending the model with evidence rather than persuasion.",
+         "What's your single strongest piece of evidence to lead with?"),
+    "Remaining uncertainty":
+        ("Honestly stating what you still don't know.",
+         "What is the biggest thing you still don't know?"),
+    "Next experiment":
+        ("The single most valuable test you would run next.",
+         "What would you test next, and what result would change your mind?"),
+}
+
+
+def concept_help(concept):
+    """(definition, explore_prompt) for a concept, with a generic fallback."""
+    return CONCEPT_LIBRARY.get(
+        concept,
+        ("A concept introduced this round.",
+         f"In a sentence or two, how does '{concept}' apply to your venture?"))
 
 # --------------------------------------------------------------------------- #
 # Generative-AI assist + verification methodology

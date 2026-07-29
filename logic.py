@@ -220,6 +220,8 @@ def canvas_focus_for_round(rnd):
 def _deliverable_done(team_id, check, rnd):
     if check == "always":
         return True
+    if check == "ack_founder_review":
+        return db.has_ack(team_id, "founder_review")
     if check == "ventures_ge_3":
         return len(db.get_ventures(team_id)) >= 3
     if check == "cp_ge_1":
@@ -277,14 +279,62 @@ def round_requirements(rnd):
 
 
 def round_progress(team_id, rnd):
-    """Each requirement with a computed done/not-done flag."""
-    return [{**d, "done": _deliverable_done(team_id, d["check"], rnd)}
+    """This round's own deliverables (decisions), each with a done flag."""
+    return [{**d, "done": _deliverable_done(team_id, d["check"], rnd), "kind": "decision"}
             for d in round_requirements(rnd)]
 
 
+# ---- Concept coverage (every concept covered by a decision or a question) --- #
+def round_concepts(rnd):
+    seen = []
+    for tp in topics_for_round(rnd):
+        for c in tp["concepts"]:
+            if c not in seen:
+                seen.append(c)
+    return seen
+
+
+def concept_progress(team_id, rnd):
+    """Each concept this round with whether its concept-check has been answered."""
+    answers = db.get_round_answers(team_id, rnd)
+    return [{"concept": c, "label": f"Concept check — {c}", "tool": "Concept Check",
+             "kind": "question", "must_update": True,
+             "done": bool((answers.get(c) or "").strip())}
+            for c in round_concepts(rnd)]
+
+
+# ---- Carry-forward of unfinished prior work -------------------------------- #
+def outstanding_prior(team_id, rnd):
+    """Incomplete deliverables AND unanswered concept-checks from earlier rounds."""
+    out = []
+    for r in range(1, rnd):
+        for d in round_requirements(r):
+            if not _deliverable_done(team_id, d["check"], r):
+                out.append({**d, "round": r, "carried": True, "done": False,
+                            "kind": "decision"})
+        answers = db.get_round_answers(team_id, r)
+        for c in round_concepts(r):
+            if not (answers.get(c) or "").strip():
+                out.append({"concept": c, "label": f"Concept check — {c}",
+                            "tool": "Concept Check", "round": r, "carried": True,
+                            "kind": "question", "must_update": True, "done": False})
+    return out
+
+
+def round_checklist(team_id, rnd):
+    """Everything a team must finish THIS round: this round's decisions and concept
+    questions, plus any unfinished work carried over from earlier rounds."""
+    return {
+        "decisions": round_progress(team_id, rnd),
+        "questions": concept_progress(team_id, rnd),
+        "carried": outstanding_prior(team_id, rnd),
+    }
+
+
 def round_complete(team_id, rnd):
-    prog = round_progress(team_id, rnd)
-    return all(p["done"] for p in prog) if prog else True
+    cl = round_checklist(team_id, rnd)
+    items = cl["decisions"] + cl["questions"] + cl["carried"]
+    return all(i["done"] for i in items) if items else True
 
 
 def strict_round_mode():
@@ -292,8 +342,8 @@ def strict_round_mode():
     return auto_flag("strict_round_mode", default=True)
 
 
-def active_tools(rnd):
-    """Student tools that are editable/relevant this round."""
+def active_tools(rnd, team_id=None):
+    """Student tools that are editable/relevant this round (incl. carried-over work)."""
     tools = set(content.ALWAYS_ACTIVE_TOOLS)
     for tp in topics_for_round(rnd):
         if tp.get("tool"):
@@ -305,25 +355,61 @@ def active_tools(rnd):
         for d in content.TOPIC_DELIVERABLES.get(tp["key"], []):
             if d.get("tool"):
                 tools.add(d["tool"])
+    if team_id is not None:
+        for d in outstanding_prior(team_id, rnd):
+            if d.get("tool"):
+                tools.add(d["tool"])
     return tools
 
 
-def tool_state(page, rnd):
-    """'locked' (not introduced), 'active' (relevant now), or 'reference' (past)."""
+def tool_state(page, rnd, team_id=None):
+    """'locked' (not introduced), 'active' (relevant now / carried work), or 'reference'."""
     if page_unlock_round(page) > rnd:
         return "locked"
-    if page in active_tools(rnd):
+    if page in active_tools(rnd, team_id):
         return "active"
     return "reference"
 
 
-def tool_editable(page, rnd):
-    state = tool_state(page, rnd)
+def tool_editable(page, rnd, team_id=None):
+    state = tool_state(page, rnd, team_id)
     if state == "locked":
         return False
     if state == "reference":
         return not strict_round_mode()
     return True
+
+
+# ---- Founder / team skills ------------------------------------------------- #
+def skill_bonus(team_id):
+    """Score bonus per dashboard dimension from the team's founder skills."""
+    bonus = {}
+    skills = db.get_team_skills(team_id)
+    for s in content.FOUNDER_SKILLS:
+        lvl = skills.get(s["key"], 0)
+        bonus[s["dimension"]] = bonus.get(s["dimension"], 0) + lvl * 3
+    return bonus
+
+
+def skill_train_cost(level):
+    """Founder-hours to raise a skill from `level` to level+1 (rising cost)."""
+    return (level + 1) * 20
+
+
+def train_skill(team_id, skill_key):
+    """Spend founder-hours to raise a skill by one level. Returns (ok, message)."""
+    skills = db.get_team_skills(team_id)
+    lvl = skills.get(skill_key, 1)
+    if lvl >= content.SKILL_MAX:
+        return False, "Already at maximum level."
+    cost = skill_train_cost(lvl)
+    ok, msg = db.adjust_resources(
+        team_id, hours=-cost, kind="training",
+        description=f"Trained {content.FOUNDER_SKILL_BY_KEY[skill_key]['name']}")
+    if not ok:
+        return False, msg
+    db.set_skill_level(team_id, skill_key, lvl + 1)
+    return True, f"Trained to level {lvl + 1} (spent {cost} founder-hours)."
 
 
 def _parse_dt(text):
@@ -767,6 +853,10 @@ def _raw_scores(team_id):
     raw["Adaptability"] = all_versions * 8 + approved_pivots * 20
     raw["Responsible Innovation"] = 50 + (50 * ai_rate if ai_rate is not None else 0)
     raw["Team Execution"] = reflections * 15 + min(40, (eff["experiments"] + ev["count"]) * 4)
+    # Founder/team skills give a bonus to their mapped dimension.
+    for dim, bonus in skill_bonus(team_id).items():
+        if dim in raw:
+            raw[dim] += bonus
     raw["Investor Confidence"] = (0.4 * raw["Evidence Strength"]
                                   + 0.3 * raw["Business-Model Coherence"]
                                   + 0.3 * raw["Value Proposition Fit"]

@@ -116,8 +116,10 @@ def landing():
 STUDENT_PAGES = {
     "Round Briefing": vs.round_briefing,
     "Inbox": vs.inbox,
+    "Concept Check": vs.concept_check,
     "Dashboard": vs.dashboard,
     "Founder & Opportunity": vs.founder_opportunity,
+    "Founder Skills": vs.founder_skills,
     "Canvases": vs.canvases,
     "VP Auction": vs.vp_auction,
     "Assumption Map": vs.assumptions,
@@ -138,7 +140,7 @@ def _make_student_label(team):
     def label(page):
         if page == "Inbox":
             return f"Inbox 🔵{unread}" if unread else "Inbox"
-        state = logic.tool_state(page, rnd)
+        state = logic.tool_state(page, rnd, team["id"])
         if state == "locked":
             return f"🔒 {page} · R{logic.page_unlock_round(page)}"
         if state == "reference" and logic.strict_round_mode():

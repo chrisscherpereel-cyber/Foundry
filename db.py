@@ -258,6 +258,32 @@ CREATE TABLE IF NOT EXISTS messages (
     created_at TEXT,
     FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS team_skills (
+    team_id   INTEGER NOT NULL,
+    skill_key TEXT NOT NULL,
+    level     INTEGER DEFAULT 1,
+    PRIMARY KEY (team_id, skill_key),
+    FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS round_answers (
+    team_id    INTEGER NOT NULL,
+    round      INTEGER NOT NULL,
+    concept    TEXT NOT NULL,
+    answer     TEXT,
+    created_at TEXT,
+    PRIMARY KEY (team_id, round, concept),
+    FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS acknowledgments (
+    team_id    INTEGER NOT NULL,
+    key        TEXT NOT NULL,
+    created_at TEXT,
+    PRIMARY KEY (team_id, key),
+    FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
+);
 """
 
 
@@ -329,7 +355,7 @@ def create_team(name, opportunity="", founder_card=None, capital=2000,
     conn = get_conn()
     try:
         code = secrets.token_hex(3).upper()
-        conn.execute(
+        cur = conn.execute(
             """INSERT INTO teams(name, join_code, opportunity, founder_card, ventures,
                                  capital, evidence_credits, venture_tokens, founder_hours,
                                  market_potential, created_at)
@@ -337,6 +363,15 @@ def create_team(name, opportunity="", founder_card=None, capital=2000,
             (name, code, opportunity, _dumps(founder_card or {}), _dumps([]),
              capital, evidence_credits, 100, founder_hours, market_potential, now()),
         )
+        team_id = cur.lastrowid
+        # Seed structured founder skills from the card archetype.
+        import content
+        levels = content.card_skill_levels((founder_card or {}).get("name", ""))
+        for skill_key, level in levels.items():
+            conn.execute(
+                "INSERT OR REPLACE INTO team_skills(team_id, skill_key, level) VALUES(?,?,?)",
+                (team_id, skill_key, level),
+            )
         conn.commit()
         return code
     finally:
@@ -1105,5 +1140,87 @@ def delete_message(msg_id):
     try:
         conn.execute("DELETE FROM messages WHERE id=?", (msg_id,))
         conn.commit()
+    finally:
+        conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# Team skills
+# --------------------------------------------------------------------------- #
+def get_team_skills(team_id):
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT skill_key, level FROM team_skills WHERE team_id=?", (team_id,)
+        ).fetchall()
+        return {r["skill_key"]: r["level"] for r in rows}
+    finally:
+        conn.close()
+
+
+def set_skill_level(team_id, skill_key, level):
+    conn = get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO team_skills(team_id, skill_key, level) VALUES(?,?,?) "
+            "ON CONFLICT(team_id, skill_key) DO UPDATE SET level=excluded.level",
+            (team_id, skill_key, int(level)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# Concept-check answers (per team, per round, per concept)
+# --------------------------------------------------------------------------- #
+def get_round_answers(team_id, round_no):
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT concept, answer FROM round_answers WHERE team_id=? AND round=?",
+            (team_id, round_no),
+        ).fetchall()
+        return {r["concept"]: r["answer"] for r in rows}
+    finally:
+        conn.close()
+
+
+def set_round_answer(team_id, round_no, concept, answer):
+    conn = get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO round_answers(team_id, round, concept, answer, created_at) "
+            "VALUES(?,?,?,?,?) ON CONFLICT(team_id, round, concept) "
+            "DO UPDATE SET answer=excluded.answer, created_at=excluded.created_at",
+            (team_id, round_no, concept, answer, now()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# Acknowledgments — one-time "I did this" markers (e.g., reviewed founder card)
+# --------------------------------------------------------------------------- #
+def set_ack(team_id, key):
+    conn = get_conn()
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO acknowledgments(team_id, key, created_at) VALUES(?,?,?)",
+            (team_id, key, now()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def has_ack(team_id, key):
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM acknowledgments WHERE team_id=? AND key=?", (team_id, key)
+        ).fetchone()
+        return row is not None
     finally:
         conn.close()
