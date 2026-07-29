@@ -32,10 +32,19 @@ first run and holds all cohort state (survives restarts).
 - **Pivot Committee** — review pivot petitions and approve / approve conditionally / request more evidence / reject / classify as random change. Optionally charge the change cost.
 - **Dashboard Scoring** — score the ten performance dimensions 0–100 per round.
 - **Cohort Overview** — leaderboard across teams plus inspection of each team's canvases, assumptions, experiments, and reflections.
+- **🤖 Auto-Director** — automates the Director's per-round decisions from each team's actual submitted work, with full override:
+  - **Predicted dashboard scores** (0–100) derived from canvases, evidence ledger, experiments, assumptions, the VP auction, and AI logs — every dimension has a transparent heuristic.
+  - **Suggested market event** aimed at each team's biggest untested high-risk assumption (risk type → event category), with a stated reason.
+  - **Recommended pivot decision** for each pending petition (Approved / Conditional / NeedsEvidence / Rejected) based on the evidence and completeness of the petition.
+  - **Predicted valuation** shown per team before anything is applied.
+  - **Tunable scoring weights** — a per-dimension weight slider (0–2×, default 1.0) lets you dial how strongly each dimension responds, or set one to 0 to ignore it — no code editing required.
+  - **Per-round feedback emails** — auto-generates a personalized "venture review" for each team (strengths, where to focus, evidence quality, untested risks, a recommended next step, predicted valuation) delivered to the team's in-app **Inbox**. Preview/edit before sending, send per team, send to all, or auto-send on run.
+  - Override any score, swap the event, or change a pivot call, then **Apply per team** or **Apply all suggestions**. Toggle each automation type on/off, and optionally **Run automatically on round advance** (manual or scheduled).
 
 **🎓 Team (student)** — enter with the join code:
 
 - **Round Briefing** — the starting point each round: this round's learning objectives, the concepts introduced in class, the specific simulation task, which tool to use, and what's newly unlocked. Includes the full round-by-round arc so students see how complexity builds.
+- **Inbox** — an in-app "email" inbox that receives a per-round **venture review** from the Director/Auto-Director (strengths, focus areas, risks, next steps). Unread messages show a 🔵 badge in the sidebar.
 - **Dashboard** — resources, live venture valuation, performance dimensions, and a warning list of high-importance untested assumptions.
 - **Founder & Opportunity** — your founder card and territory; log ≥3 candidate ventures scored on importance, fit, access, evidence availability, affordability.
 - **Canvases** — the real Strategyzer canvases in their canonical layouts: **Customer Profile** (the circle — gains / jobs / pains), the **Value Proposition Canvas** (value-map square beside the customer-profile circle, so the "fit" is visible), and the **Business Model Canvas** (the nine blocks in their standard grid positions). All versioned with dated change notes and full history. The three canvases are **staged across several rounds** (Customer Profile → VPC → BMC) so no single round is overloaded; the page shows the current round's focus canvas and flags any introduced later.

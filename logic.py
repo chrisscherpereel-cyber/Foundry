@@ -5,6 +5,7 @@ and the editable schedule (round -> topic -> advance time).
 Kept free of Streamlit so it can be unit-tested and reused.
 """
 
+import json
 from datetime import datetime, timezone
 
 import db
@@ -560,3 +561,312 @@ def experiment_efficiency(team_id):
         "strength_per_dollar": round(strength / money, 3) if money else 0,
         "strength_per_hour": round(strength / hours, 3) if hours else 0,
     }
+
+
+# --------------------------------------------------------------------------- #
+# Auto-Director (autopilot)
+#
+# Derives the Director's per-round decisions from each team's actual round input
+# (their canvases, evidence, experiments, assumptions, auction, AI logs, etc.):
+#   • predicted dashboard scores (0–100) per dimension
+#   • a suggested market event aimed at the team's biggest exposed risk
+#   • a recommended decision for each pending pivot petition
+# Every suggestion is just that — the Director can override before applying.
+# --------------------------------------------------------------------------- #
+def _clamp100(x):
+    return int(max(0, min(100, round(x))))
+
+
+def _filled_blocks(canvas):
+    if not canvas:
+        return 0, 0
+    data = canvas.get("data", {}) or {}
+    total = len(data)
+    filled = sum(1 for v in data.values() if v and str(v).strip())
+    return filled, total
+
+
+def default_score_weights():
+    """Per-dimension weight multipliers, default 1.0 for every dimension."""
+    return {dim: 1.0 for dim in content.DIMENSION_NAMES}
+
+
+def get_score_weights():
+    """Load the Director's tunable per-dimension weights (1.0 = default)."""
+    raw = db.get_setting("score_weights")
+    weights = default_score_weights()
+    if raw:
+        try:
+            saved = json.loads(raw)
+            for dim in weights:
+                if dim in saved:
+                    weights[dim] = float(saved[dim])
+        except (ValueError, TypeError):
+            pass
+    return weights
+
+
+def set_score_weights(weights):
+    clean = {dim: round(float(weights.get(dim, 1.0)), 2) for dim in content.DIMENSION_NAMES}
+    db.set_setting("score_weights", json.dumps(clean))
+
+
+def _raw_scores(team_id):
+    """Compute the UNWEIGHTED heuristic score for each dimension (0..~100 floats)."""
+    ev = evidence_summary(team_id)
+    risk = assumption_risk_report(team_id)
+    eff = experiment_efficiency(team_id)
+
+    cp = db.latest_canvas(team_id, "customer_profile")
+    vpc = db.latest_canvas(team_id, "vpc")
+    bmc = db.latest_canvas(team_id, "bmc")
+    cp_filled, _ = _filled_blocks(cp)
+    vpc_filled, _ = _filled_blocks(vpc)
+    bmc_filled, _ = _filled_blocks(bmc)
+
+    cp_versions = len(db.list_canvases(team_id, "customer_profile"))
+    all_versions = len(db.list_canvases(team_id))
+    vp_results = db.list_vp_results(team_id)
+    latest_align = vp_results[0]["alignment"] if vp_results else 0.0
+
+    approved_pivots = sum(1 for p in db.list_pivots(team_id)
+                          if p["status"] in ("Approved", "Conditional"))
+    reflections = len(db.list_reflections(team_id))
+    ai_logs = db.list_ai_logs(team_id)
+    ai_verified = sum(1 for l in ai_logs if l["status"] in ("Verified", "Modified"))
+    ai_rate = (ai_verified / len(ai_logs)) if ai_logs else None
+
+    bmc_data = (bmc or {}).get("data", {}) if bmc else {}
+    has_revenue = bool(str(bmc_data.get("revenue_streams", "")).strip())
+    has_cost = bool(str(bmc_data.get("cost_structure", "")).strip())
+    pricing_exps = sum(1 for e in db.list_experiments(team_id)
+                       if "price" in (e["card_type"] or "").lower()
+                       or "preorder" in (e["card_type"] or "").lower())
+
+    raw = {}
+    raw["Customer Insight"] = (50 * (cp_filled / 3) + min(20, max(0, cp_versions - 1) * 10)
+                               + min(30, ev["behavioral"] * 5))
+    raw["Value Proposition Fit"] = 50 * (vpc_filled / 6) + 50 * float(latest_align or 0)
+    raw["Evidence Strength"] = ev["avg_strength"] * 8 + min(20, ev["behavioral"] * 4)
+    raw["Business-Model Coherence"] = 100 * (bmc_filled / 9)
+    raw["Experiment Efficiency"] = eff["resolved"] * 20 + (eff["experiments"] - eff["resolved"]) * 5
+    raw["Financial Viability"] = ((25 if has_revenue else 0) + (25 if has_cost else 0)
+                                  + min(30, risk["supported"] * 10) + (20 if pricing_exps else 0))
+    raw["Adaptability"] = all_versions * 8 + approved_pivots * 20
+    raw["Responsible Innovation"] = 50 + (50 * ai_rate if ai_rate is not None else 0)
+    raw["Team Execution"] = reflections * 15 + min(40, (eff["experiments"] + ev["count"]) * 4)
+    raw["Investor Confidence"] = (0.4 * raw["Evidence Strength"]
+                                  + 0.3 * raw["Business-Model Coherence"]
+                                  + 0.3 * raw["Value Proposition Fit"]
+                                  - len(risk["exposed"]) * 5)
+    return raw
+
+
+def auto_scores(team_id, weights=None):
+    """Predict 0–100 dashboard scores from a team's submitted work.
+
+    Each dimension's raw heuristic score is multiplied by the Director's tunable
+    weight (default 1.0) and clamped to 0–100.
+    """
+    raw = _raw_scores(team_id)
+    weights = weights or get_score_weights()
+    return {dim: _clamp100(raw[dim] * weights.get(dim, 1.0)) for dim in content.DIMENSION_NAMES}
+
+
+def valuation_from_scores(team_id, scores):
+    """Predicted valuation from a set of (possibly not-yet-saved) scores."""
+    team = db.get_team(team_id)
+    if not team:
+        return None
+    value = (team["market_potential"]
+             * _index_from_score(scores.get("Evidence Strength"))
+             * _index_from_score(scores.get("Business-Model Coherence"))
+             * _index_from_score(scores.get("Team Execution"))
+             - (team["unresolved_risk"] or 0))
+    return round(value, 0)
+
+
+def apply_scores(team_id, round_no, scores):
+    for dim, val in scores.items():
+        db.set_score(team_id, round_no, dim, val)
+
+
+# Map the risk type of a team's biggest exposed assumption to an event category.
+_RISK_TO_EVENT = {
+    "Desirability": "Customer",
+    "Feasibility": "Operational",
+    "Viability": "Financial",
+    "Adaptability": "Competitive",
+}
+
+
+def suggest_event(team_id, round_no=None):
+    """Suggest a market event aimed at the team's biggest exposed risk.
+
+    Returns {category, text, exposes, reason}. Falls back to the round's topic
+    when the team has no exposed assumption yet.
+    """
+    import random
+    risk = assumption_risk_report(team_id)
+    category = None
+    reason = ""
+    if risk["exposed"]:
+        top = risk["exposed"][0]
+        category = _RISK_TO_EVENT.get(top["risk_type"])
+        reason = f"Targets untested {top['risk_type']} assumption: “{top['text']}”."
+    if not category:
+        # Fall back to the current round's canvas focus / topic flavor.
+        rnd = round_no or db.current_round()
+        focuses = canvas_focus_for_round(rnd)
+        if "bmc" in focuses:
+            category = "Competitive"
+        elif focuses:
+            category = "Customer"
+        else:
+            category = random.choice(list(content.MARKET_EVENTS.keys()))
+        reason = "No high-risk untested assumption yet — chosen from this round's focus."
+    text, exposes = random.choice(content.MARKET_EVENTS[category])
+    return {"category": category, "text": text, "exposes": exposes, "reason": reason}
+
+
+def recommend_pivot(pivot):
+    """Recommend a committee decision for a pivot petition from its completeness."""
+    has_evidence = bool((pivot.get("challenge_evid") or "").strip())
+    has_change = bool((pivot.get("proposed_change") or "").strip())
+    has_new = bool((pivot.get("new_assumptions") or "").strip())
+    has_needed = bool((pivot.get("evidence_needed") or "").strip())
+    if not has_change or not (pivot.get("original_assum") or "").strip():
+        return "Rejected", "Missing the original assumption or a concrete proposed change."
+    if not has_evidence:
+        return "NeedsEvidence", "No challenging evidence cited — ask the team to test first."
+    if has_evidence and has_new and has_needed:
+        cost = pivot.get("change_cost") or 0
+        if cost and cost > 1000:
+            return "Conditional", "Evidence-based, but costly — approve subject to milestones."
+        return "Approved", "Evidence cited and new assumptions/tests defined — disciplined pivot."
+    return "Conditional", "Partly justified — approve conditionally and request the missing pieces."
+
+
+# ---- Per-round feedback "email" ------------------------------------------- #
+def generate_feedback(team_id, round_no=None, scores=None):
+    """Compose a per-round feedback email for a team from its predicted performance.
+
+    Returns {subject, body}. Highlights strengths and weak spots, evidence quality,
+    exposed risks, the market event they face, and a concrete next step.
+    """
+    team = db.get_team(team_id)
+    rnd = round_no or db.current_round()
+    scores = scores or auto_scores(team_id)
+    ev = evidence_summary(team_id)
+    risk = assumption_risk_report(team_id)
+
+    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+    strengths = [d for d, s in ranked[:3] if s >= 55]
+    weak = [d for d, s in ranked[::-1][:3] if s <= 55]
+    pred_val = valuation_from_scores(team_id, scores)
+
+    lines = [f"Hi {team['name']},", "",
+             f"Here's your Round {rnd} venture review from the Foundry.", ""]
+    lines.append(f"Predicted venture valuation: ${pred_val:,.0f}")
+    lines.append("")
+    if strengths:
+        lines.append("What's working:")
+        for d in strengths:
+            lines.append(f"  • {d} ({scores[d]}/100)")
+        lines.append("")
+    if weak:
+        lines.append("Where to focus next:")
+        for d in weak:
+            lines.append(f"  • {d} ({scores[d]}/100)")
+        lines.append("")
+
+    lines.append(f"Evidence: {ev['count']} logged, {ev['behavioral']} behavioral "
+                 f"(avg strength {ev['avg_strength']}/10). "
+                 + ("Strong behavioral base — keep it up."
+                    if ev['behavioral'] >= 3 else
+                    "Push for more behavioral evidence (trials, LOIs, preorders) over opinions."))
+    lines.append("")
+
+    if risk["exposed"]:
+        lines.append("⚠️ High-risk assumptions you haven't tested yet:")
+        for a in risk["exposed"][:3]:
+            lines.append(f"  • {a['text']} ({a['risk_type']})")
+        top = risk["exposed"][0]
+        lines.append("")
+        lines.append(f"Recommended next step: design the cheapest experiment that could "
+                     f"disprove “{top['text']}”, set a success/failure threshold in advance, "
+                     f"and run it before you invest further.")
+    else:
+        lines.append("Recommended next step: convert your latest learning into your next "
+                     "canvas version and line up the next assumption to test.")
+
+    # Reference the newest market event they were dealt, if any.
+    events = [e for e in db.list_events(team_id) if e["round"] == rnd]
+    if events:
+        e = events[0]
+        lines.append("")
+        lines.append(f"Market watch ({e['category']}): {e['text']} "
+                     f"This pressures the assumption: {e['exposes']}")
+
+    lines.append("")
+    lines.append("— The Venture Foundry Director")
+    return {"subject": f"Round {rnd} venture review — {team['name']}",
+            "body": "\n".join(lines)}
+
+
+def send_feedback(team_id, round_no=None, scores=None):
+    fb = generate_feedback(team_id, round_no, scores)
+    db.add_message(team_id, fb["subject"], fb["body"], round_no or db.current_round())
+    return fb
+
+
+# ---- Automation settings & batch run -------------------------------------- #
+def auto_flag(key, default=True):
+    val = db.get_setting(key)
+    if val is None:
+        return default
+    return str(val) == "1"
+
+
+def set_auto_flag(key, value):
+    db.set_setting(key, "1" if value else "0")
+
+
+def run_autopilot(round_no=None, teams=None):
+    """Apply enabled automation for a round. Returns a per-team summary.
+
+    Idempotent-ish: scores overwrite for the round; an event is only issued to a
+    team that has none for that round; pending pivots are decided by recommendation.
+    """
+    rnd = round_no or db.current_round()
+    teams = teams if teams is not None else db.list_teams()
+    summary = []
+    for t in teams:
+        entry = {"team": t["name"], "team_id": t["id"], "scored": False,
+                 "event": None, "pivots": 0}
+        if auto_flag("auto_scoring_on"):
+            sc = auto_scores(t["id"])
+            apply_scores(t["id"], rnd, sc)
+            entry["scored"] = True
+        if auto_flag("auto_events_on"):
+            existing = [e for e in db.list_events(t["id"], include_broadcast=False)
+                        if e["round"] == rnd]
+            if not existing:
+                ev = suggest_event(t["id"], rnd)
+                db.add_event(t["id"], rnd, ev["category"], ev["text"], ev["exposes"])
+                entry["event"] = ev["category"]
+        if auto_flag("auto_pivots_on"):
+            for p in db.list_pivots(t["id"]):
+                if p["status"] == "Submitted":
+                    dec, note = recommend_pivot(p)
+                    db.decide_pivot(p["id"], dec, "[auto] " + note)
+                    if dec in ("Approved", "Conditional") and (p["change_cost"] or 0):
+                        db.adjust_resources(t["id"], money=-p["change_cost"], kind="pivot",
+                                            description="Pivot change cost (auto)",
+                                            allow_negative=True)
+                    entry["pivots"] += 1
+        if auto_flag("auto_feedback_on"):
+            send_feedback(t["id"], rnd)
+            entry["feedback"] = True
+        summary.append(entry)
+    return summary

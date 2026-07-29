@@ -29,6 +29,173 @@ def _guide(what, steps=None, terms=None, expanded=False):
 
 
 # --------------------------------------------------------------------------- #
+# Auto-Director — automate scoring / events / pivots from team input, with override
+# --------------------------------------------------------------------------- #
+def auto_director():
+    st.subheader("🤖 Auto-Director")
+    _guide(
+        "Let the app play Director. It reads what each team actually submitted this round "
+        "(canvases, evidence, experiments, assumptions, auction, AI logs) and predicts their "
+        "performance — turning that into suggested dashboard scores, a market event aimed at "
+        "each team's biggest untested risk, and a recommended decision for any pending pivot. "
+        "Nothing is final until you apply it: review the suggestions, override anything, then "
+        "apply per team or all at once. You can also let it run automatically each time the "
+        "round advances.",
+        steps=[
+            "Turn on the kinds of decisions you want automated.",
+            "Click Compute suggestions to see predicted scores, events, and pivot calls.",
+            "Override any value, then Apply per team — or Apply all suggestions.",
+            "Optionally enable 'Run automatically on round advance'.",
+        ],
+        terms=[
+            ("Predicted performance", "Scores the app derives from each team's submitted work."),
+            ("Override", "Change any suggested value before it's applied — you have final say."),
+            ("Auto-run on advance", "Apply enabled automation whenever the round moves forward."),
+        ],
+    )
+
+    # ---- Automation settings ------------------------------------------------
+    st.write("### Automation settings")
+    s1, s2, s3 = st.columns(3)
+    with s1:
+        auto_scoring = st.checkbox("Auto scoring", value=logic.auto_flag("auto_scoring_on"),
+                                   help="Predict dashboard scores from team input.")
+        auto_events = st.checkbox("Auto events", value=logic.auto_flag("auto_events_on"),
+                                  help="Issue a market event aimed at each team's biggest risk.")
+    with s2:
+        auto_pivots = st.checkbox("Auto pivots", value=logic.auto_flag("auto_pivots_on"),
+                                  help="Decide pending pivot petitions by recommendation.")
+        auto_feedback = st.checkbox("Auto feedback emails", value=logic.auto_flag("auto_feedback_on"),
+                                    help="Send each team a venture-review email to their Inbox.")
+    with s3:
+        auto_run = st.checkbox("Run on advance",
+                               value=logic.auto_flag("auto_run_on_advance", default=False),
+                               help="Apply the enabled automation automatically whenever the "
+                                    "round advances (manually or on schedule).")
+    if st.button("Save automation settings"):
+        logic.set_auto_flag("auto_scoring_on", auto_scoring)
+        logic.set_auto_flag("auto_events_on", auto_events)
+        logic.set_auto_flag("auto_pivots_on", auto_pivots)
+        logic.set_auto_flag("auto_feedback_on", auto_feedback)
+        logic.set_auto_flag("auto_run_on_advance", auto_run)
+        st.success("Settings saved.")
+
+    # ---- Tunable scoring weights -------------------------------------------
+    with st.expander("⚖️ Scoring weights — tune how each dimension is scored"):
+        st.caption("Each predicted score is the heuristic value × this weight (1.0 = default). "
+                   "Set a dimension to 0 to ignore it, or above 1 to emphasize it. Changes "
+                   "affect all predicted scores immediately.")
+        weights = logic.get_score_weights()
+        new_weights = {}
+        wc = st.columns(2)
+        for i, (dim, meaning) in enumerate(content.DASHBOARD_DIMENSIONS):
+            with wc[i % 2]:
+                new_weights[dim] = st.slider(dim, 0.0, 2.0, float(weights.get(dim, 1.0)), 0.1,
+                                             help=meaning, key=f"wt_{dim}")
+        b1, b2 = st.columns(2)
+        if b1.button("Save weights"):
+            logic.set_score_weights(new_weights)
+            st.success("Scoring weights saved.")
+            st.rerun()
+        if b2.button("Reset weights to 1.0"):
+            logic.set_score_weights(logic.default_score_weights())
+            st.success("Weights reset.")
+            st.rerun()
+
+    teams = db.list_teams()
+    if not teams:
+        st.info("No teams yet. Create teams on the Team Setup page first.")
+        return
+
+    rnd = db.current_round()
+    st.divider()
+    hc1, hc2, hc3 = st.columns([2, 1, 1])
+    hc1.write(f"### Suggestions for Round {rnd}")
+    if hc2.button("✉️ Send feedback to all", help="Email a venture review to every team's Inbox."):
+        for t in teams:
+            logic.send_feedback(t["id"], rnd)
+        st.success("Feedback emails sent to all teams.")
+        st.rerun()
+    if hc3.button("⚡ Apply ALL suggestions", help="Run enabled automation for every team now."):
+        logic.run_autopilot(rnd)
+        st.success("Applied enabled automation to all teams.")
+        st.rerun()
+
+    # ---- Per-team suggestions with override ---------------------------------
+    for t in teams:
+        sc = logic.auto_scores(t["id"])
+        pred_val = logic.valuation_from_scores(t["id"], sc)
+        with st.expander(f"{t['name']} — predicted valuation ${pred_val:,.0f}"):
+            st.markdown("**Predicted dashboard scores** (override any, then apply)")
+            overrides = {}
+            cols = st.columns(2)
+            for i, (dim, _meaning) in enumerate(content.DASHBOARD_DIMENSIONS):
+                with cols[i % 2]:
+                    overrides[dim] = st.slider(dim, 0, 100, int(sc[dim]),
+                                               key=f"auto_sc_{t['id']}_{dim}")
+            if st.button("Apply scores", key=f"auto_apply_sc_{t['id']}"):
+                logic.apply_scores(t["id"], rnd, overrides)
+                st.success(f"Scores applied to {t['name']} for Round {rnd}.")
+                st.rerun()
+
+            # Suggested event
+            st.markdown("**Suggested market event**")
+            ev = logic.suggest_event(t["id"], rnd)
+            st.caption(ev["reason"])
+            ecat = st.selectbox(
+                "Category", list(content.MARKET_EVENTS.keys()),
+                index=list(content.MARKET_EVENTS.keys()).index(ev["category"]),
+                key=f"auto_ecat_{t['id']}")
+            opts = content.MARKET_EVENTS[ecat]
+            # Try to keep the suggested text if still in the chosen category.
+            texts = [o[0] for o in opts]
+            default_i = texts.index(ev["text"]) if ev["text"] in texts else 0
+            eidx = st.selectbox("Event", range(len(opts)),
+                                format_func=lambda i, o=opts: o[i][0],
+                                index=default_i, key=f"auto_eidx_{t['id']}")
+            etext, eexp = opts[eidx]
+            st.caption(f"Exposes: {eexp}")
+            if st.button("Issue this event", key=f"auto_issue_{t['id']}"):
+                db.add_event(t["id"], rnd, ecat, etext, eexp)
+                st.success(f"Event issued to {t['name']}.")
+                st.rerun()
+
+            # Feedback email — preview & send
+            st.markdown("**Feedback email (venture review)**")
+            fb = logic.generate_feedback(t["id"], rnd, sc)
+            with st.popover("Preview / edit"):
+                subj = st.text_input("Subject", value=fb["subject"], key=f"fb_subj_{t['id']}")
+                body = st.text_area("Body", value=fb["body"], height=260, key=f"fb_body_{t['id']}")
+                if st.button("Send to team Inbox", key=f"fb_send_{t['id']}"):
+                    db.add_message(t["id"], subj, body, rnd)
+                    st.success("Sent.")
+            if st.button("Send suggested feedback", key=f"fb_quick_{t['id']}"):
+                logic.send_feedback(t["id"], rnd, sc)
+                st.success(f"Feedback sent to {t['name']}.")
+
+            # Pending pivots
+            pend = [p for p in db.list_pivots(t["id"]) if p["status"] == "Submitted"]
+            if pend:
+                st.markdown("**Pending pivot petitions**")
+                for p in pend:
+                    dec, note = logic.recommend_pivot(p)
+                    st.write(f"“{p['proposed_change'][:60]}” → recommended: **{dec}**")
+                    st.caption(note)
+                    chosen = st.selectbox(
+                        "Decision", content.PIVOT_DECISIONS,
+                        index=content.PIVOT_DECISIONS.index(dec),
+                        key=f"auto_pdec_{p['id']}")
+                    if st.button("Apply decision", key=f"auto_papply_{p['id']}"):
+                        db.decide_pivot(p["id"], chosen, "[auto] " + note)
+                        if chosen in ("Approved", "Conditional") and (p["change_cost"] or 0):
+                            db.adjust_resources(t["id"], money=-p["change_cost"], kind="pivot",
+                                                description="Pivot change cost (auto)",
+                                                allow_negative=True)
+                        st.success("Decision recorded.")
+                        st.rerun()
+
+
+# --------------------------------------------------------------------------- #
 # Schedule & timing — number of rounds, topic order, advance date/times
 # --------------------------------------------------------------------------- #
 def schedule():
@@ -228,8 +395,13 @@ def round_control():
                  "reflections. Change the number of rounds and topic order on the "
                  "Schedule & Timing page.")
         if st.button("Set round", help="Apply the round number to the whole cohort."):
+            advanced = int(new_round) > cur
             db.set_setting("current_round", int(new_round))
-            st.success(f"Round set to {new_round}.")
+            msg = f"Round set to {new_round}."
+            if advanced and logic.auto_flag("auto_run_on_advance", default=False):
+                logic.run_autopilot(int(new_round))
+                msg += " Auto-Director applied for the new round."
+            st.success(msg)
             st.rerun()
     nxt = logic.next_scheduled_advance()
     if nxt:

@@ -28,7 +28,12 @@ st.set_page_config(page_title="Venture Foundry — The Evidence Economy",
                    page_icon="🏭", layout="wide")
 
 db.init_db()
-logic.maybe_auto_advance()   # date/time-based round advance, applied on load
+# Date/time-based round advance, applied on load. If the round moved forward and
+# the Director enabled it, run the Auto-Director for the new round.
+_prev_round = db.current_round()
+_new_round = logic.maybe_auto_advance()
+if _new_round != _prev_round and logic.auto_flag("auto_run_on_advance", default=False):
+    logic.run_autopilot(_new_round)
 
 
 def _scroll_top_on_change(state_key, page):
@@ -110,6 +115,7 @@ def landing():
 # --------------------------------------------------------------------------- #
 STUDENT_PAGES = {
     "Round Briefing": vs.round_briefing,
+    "Inbox": vs.inbox,
     "Dashboard": vs.dashboard,
     "Founder & Opportunity": vs.founder_opportunity,
     "Canvases": vs.canvases,
@@ -124,14 +130,21 @@ STUDENT_PAGES = {
 }
 
 
-def _student_page_label(page):
-    """Annotate a page with the round it's introduced; lock icon if not yet reached."""
-    wk = logic.page_unlock_round(page)
-    if not wk or wk <= 1:
-        return page
-    if db.current_round() < wk:
-        return f"🔒 {page} · R{wk}"
-    return f"{page} · R{wk}"
+def _make_student_label(team):
+    """Build a sidebar label function: unlock-round annotation + Inbox unread badge."""
+    unread = db.unread_count(team["id"])
+
+    def label(page):
+        if page == "Inbox" and unread:
+            return f"Inbox 🔵{unread}"
+        wk = logic.page_unlock_round(page)
+        if not wk or wk <= 1:
+            return page
+        if db.current_round() < wk:
+            return f"🔒 {page} · R{wk}"
+        return f"{page} · R{wk}"
+
+    return label
 
 
 def student_shell():
@@ -147,7 +160,7 @@ def student_shell():
         st.caption(f"Round {db.current_round()} · {team['stage']}")
         st.metric("Credits", f"{team['evidence_credits']:.1f}")
         page = st.radio("Go to", list(STUDENT_PAGES.keys()),
-                        format_func=_student_page_label)
+                        format_func=_make_student_label(team))
         st.caption("🔒 = tool is introduced in a later round (still explorable).")
         with st.expander("Rotating team roles"):
             for role, desc in content.TEAM_ROLES:
@@ -163,6 +176,7 @@ def student_shell():
 # --------------------------------------------------------------------------- #
 INSTRUCTOR_PAGES = {
     "Cohort Overview": vi.overview,
+    "Auto-Director": vi.auto_director,
     "Team Setup": vi.team_setup,
     "Schedule & Timing": vi.schedule,
     "Round Control": vi.round_control,

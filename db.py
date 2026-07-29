@@ -246,6 +246,18 @@ CREATE TABLE IF NOT EXISTS round_topics (
     round     INTEGER,                -- which round covers this material
     position  INTEGER                 -- order of the material within that round
 );
+
+CREATE TABLE IF NOT EXISTS messages (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_id    INTEGER NOT NULL,
+    round      INTEGER,
+    subject    TEXT,
+    body       TEXT,
+    sender     TEXT,
+    read       INTEGER DEFAULT 0,
+    created_at TEXT,
+    FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
+);
 """
 
 
@@ -1027,6 +1039,71 @@ def remove_round_topic(topic_key):
     conn = get_conn()
     try:
         conn.execute("DELETE FROM round_topics WHERE topic_key=?", (topic_key,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# Messages — in-app "email" inbox per team
+# --------------------------------------------------------------------------- #
+def add_message(team_id, subject, body, round_no=None, sender="Venture Foundry Director"):
+    conn = get_conn()
+    try:
+        conn.execute(
+            """INSERT INTO messages(team_id, round, subject, body, sender, read, created_at)
+               VALUES(?,?,?,?,?,0,?)""",
+            (team_id, round_no, subject, body, sender, now()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_messages(team_id):
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM messages WHERE team_id=? ORDER BY id DESC", (team_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def unread_count(team_id):
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS c FROM messages WHERE team_id=? AND read=0", (team_id,)
+        ).fetchone()
+        return row["c"] if row else 0
+    finally:
+        conn.close()
+
+
+def mark_message_read(msg_id, read=1):
+    conn = get_conn()
+    try:
+        conn.execute("UPDATE messages SET read=? WHERE id=?", (read, msg_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def mark_all_read(team_id):
+    conn = get_conn()
+    try:
+        conn.execute("UPDATE messages SET read=1 WHERE team_id=?", (team_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_message(msg_id):
+    conn = get_conn()
+    try:
+        conn.execute("DELETE FROM messages WHERE id=?", (msg_id,))
         conn.commit()
     finally:
         conn.close()

@@ -370,7 +370,7 @@ PIVOT_DECISIONS = [
 # --------------------------------------------------------------------------- #
 
 # Tools available from the very first round regardless of topic order.
-BASE_TOOLS = ["Round Briefing", "Dashboard", "Founder & Opportunity",
+BASE_TOOLS = ["Round Briefing", "Inbox", "Dashboard", "Founder & Opportunity",
               "AI Assist Log", "Decision Journal"]
 
 CURRICULUM_TOPICS = [

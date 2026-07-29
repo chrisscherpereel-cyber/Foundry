@@ -131,6 +131,46 @@ def round_briefing(team):
 
 
 # --------------------------------------------------------------------------- #
+# Inbox — in-app feedback "email" from the Director / Auto-Director
+# --------------------------------------------------------------------------- #
+def inbox(team):
+    st.subheader("📬 Inbox")
+    _guide(
+        "After each round you receive a venture review here — an in-app email from the Foundry "
+        "summarizing your predicted performance, what's working, where to focus, your untested "
+        "risks, and a recommended next step. New messages are marked unread; open one to read "
+        "the full review.",
+        terms=[
+            ("Venture review", "Your per-round feedback email."),
+            ("Unread", "A message you haven't opened yet (shown with 🔵)."),
+        ],
+    )
+    msgs = db.list_messages(team["id"])
+    top = st.columns([3, 1])
+    top[0].caption(f"{len(msgs)} message(s) · {db.unread_count(team['id'])} unread")
+    if msgs and top[1].button("Mark all read"):
+        db.mark_all_read(team["id"])
+        st.rerun()
+
+    if not msgs:
+        st.info("No messages yet. Your first venture review arrives after this round is scored.")
+        return
+
+    for m in msgs:
+        dot = "🔵 " if not m["read"] else ""
+        with st.expander(f"{dot}{m['subject']} · {m['created_at']}"):
+            st.caption(f"From: {m['sender']}" + (f" · Round {m['round']}" if m["round"] else ""))
+            st.text(m["body"])
+            cols = st.columns(2)
+            if not m["read"] and cols[0].button("Mark read", key=f"msgread_{m['id']}"):
+                db.mark_message_read(m["id"])
+                st.rerun()
+            if cols[1].button("Delete", key=f"msgdel_{m['id']}"):
+                db.delete_message(m["id"])
+                st.rerun()
+
+
+# --------------------------------------------------------------------------- #
 # Dashboard
 # --------------------------------------------------------------------------- #
 def dashboard(team):
