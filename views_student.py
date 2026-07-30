@@ -70,19 +70,22 @@ def _pareto_time_chart(cats):
         return
     df = pd.DataFrame(data, columns=["Activity", "Hours"]).sort_values(
         "Hours", ascending=False).reset_index(drop=True)
+    df["Label"] = df["Activity"].apply(lambda s: s if len(s) <= 14 else s[:13] + "…")
     total = df["Hours"].sum()
     df["Cumulative %"] = (df["Hours"].cumsum() / total * 100).round(0)
-    order = list(df["Activity"])
+    order = list(df["Label"])
     base = alt.Chart(df).encode(
-        x=alt.X("Activity:N", sort=order, axis=alt.Axis(labelAngle=-35, title=None)))
+        x=alt.X("Label:N", sort=order, axis=alt.Axis(labelAngle=0, title=None)))
     bars = base.mark_bar(color="#2b6cb0").encode(
         y=alt.Y("Hours:Q", title="Hours / week"),
         tooltip=["Activity", "Hours"])
     line = base.mark_line(point=True, color="#f2a938").encode(
-        y=alt.Y("Cumulative %:Q", axis=alt.Axis(title="Cumulative %"), scale=alt.Scale(domain=[0, 100])),
+        y=alt.Y("Cumulative %:Q", axis=alt.Axis(title="Cumulative %"),
+                scale=alt.Scale(domain=[0, 100])),
         tooltip=["Activity", "Cumulative %"])
-    st.altair_chart((bars + line).resolve_scale(y="independent").properties(height=260),
-                    use_container_width=True)
+    chart = (bars + line).resolve_scale(y="independent").properties(
+        height=280, title="Founder & team hours this round")
+    st.altair_chart(chart, use_container_width=True)
 
 
 def _shade_row(label, done, must_update):
@@ -387,59 +390,52 @@ def founder_skills(team):
             ("Effective skill", "Founder level + hired boost — what actually counts (cap 5)."),
         ],
     )
-    team = _refresh_team(team["id"])
+    team = logic.sync_round_hours(_refresh_team(team["id"]))
     cur = db.current_round()
     effort = int(logic.effort_hours(team))
     eff = logic.productive_hours(effort)
     admin = logic.admin_hours(team)
     mgmt = int(logic.management_hours(team["id"]))
-    disc = logic.round_hours_budget(team)
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Hours available now", f"{team['founder_hours']:.0f}",
-              help="Effective hours to spend on building or training this round. Resets each "
-                   "round; unused hours are lost.")
+    used = int((team.get("spent_build") or 0) + (team.get("spent_train") or 0)
+               + (team.get("spent_other") or 0))
+    avail = int(team["founder_hours"])
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Hours available now", f"{avail}",
+              help="Effective hours left this round to spend on experiments (building) or "
+                   "training. Resets each round; unused hours are lost.")
     m2.metric("This week's effort", f"{effort}h → {eff} eff.",
-              help="Raw hours the founder works this week (max 80). Hours past 40 are half as "
-                   "productive, so effective time grows slowly.")
-    m3.metric("Fixed: admin + managing", f"-{admin + mgmt} hrs",
-              help=f"Admin/overhead {admin}h + managing hires {mgmt}h — off the top each round.")
-    m4.metric("Discretionary", f"{disc} hrs",
-              help="Effective hours left to split between building and learning/training.")
+              help="How hard the founder works (max 80h). Hours past 40 are half as productive.")
+    m3.metric("Used so far this round", f"{used} hrs",
+              help="Building + training + hiring time you've already spent this round.")
+
+    # ---- Effort control -----------------------------------------------------
+    st.divider()
+    st.write("### ⏱️ Founder effort this week")
+    st.caption("Choose how hard the founder works. The first 40 hours are fully productive; each "
+               "hour up to 80 counts for half. Admin and managing hires come off the top — the "
+               "rest is yours to spend on building (experiments) or training, as you go.")
+    ec1, ec2 = st.columns([3, 1])
+    new_effort = ec1.slider(
+        "Founder effort (raw hours this week)", content.FULL_PRODUCTIVITY_HOURS,
+        content.MAX_WEEKLY_HOURS, effort, 5,
+        help="More effort = more effective hours, with diminishing returns past 40h.")
+    ec1.caption(f"{new_effort}h raw → **{logic.productive_hours(new_effort)} effective** "
+                f"(−{int(round(logic.productive_hours(new_effort)*content.ADMIN_OVERHEAD_PCT))} admin "
+                f"−{mgmt} managing = "
+                f"**{max(0, logic.productive_hours(new_effort) - int(round(logic.productive_hours(new_effort)*content.ADMIN_OVERHEAD_PCT)) - mgmt)} discretionary**).")
+    if ec2.button("Save effort", type="primary" if new_effort != effort else "secondary"):
+        logic.set_effort(team["id"], new_effort)
+        st.success("Effort saved. (Round-1 deliverable ✓)")
+        st.rerun()
     salary = sum((h["per_round"] or 0) for h in db.list_hires(team["id"]))
     if salary:
-        st.caption(f"💸 Specialist salaries: **${salary:,.0f}/round** (charged from capital).")
+        ec1.caption(f"💸 Specialist salaries: **${salary:,.0f}/round** (from capital).")
 
-    # ---- Effort + time allocation planner + Pareto chart --------------------
-    st.divider()
-    st.write("### ⏱️ Founder effort & time allocation")
-    st.caption("Choose how hard the founder works this week (up to 80 hours — but hours past 40 "
-               "are half as productive). Admin and managing hires come off the top; you split the "
-               "rest between building the business and learning/training. Re-allocate any round.")
-    a1, a2 = st.columns([2, 3])
-    with a1:
-        new_effort = st.slider(
-            "Founder effort this week (raw hours)", content.FULL_PRODUCTIVITY_HOURS,
-            content.MAX_WEEKLY_HOURS, effort, 5,
-            help="40h is fully productive; each hour to 80 counts for half. More effort = more "
-                 "effective hours, but with diminishing returns.")
-        st.caption(f"{new_effort}h raw → **{logic.productive_hours(new_effort)} effective** hours.")
-        bpct = st.slider("Building vs. learning (share of discretionary time to building)",
-                         0, 100, logic.get_build_pct(team), 5,
-                         help="Higher = more time running experiments/customer work; lower = "
-                              "more time training and learning.")
-        preview_disc = max(0, logic.productive_hours(new_effort)
-                           - int(round(logic.productive_hours(new_effort) * content.ADMIN_OVERHEAD_PCT))
-                           - mgmt)
-        build_h = int(round(preview_disc * bpct / 100))
-        st.caption(f"→ Building **{build_h} hrs** · Learning **{preview_disc - build_h} hrs**")
-        if st.button("Save effort & allocation"):
-            logic.set_effort(team["id"], new_effort)
-            logic.set_build_pct(team["id"], bpct)
-            st.success("Saved. (Round-1 deliverable ✓)")
-            st.rerun()
-    with a2:
-        _pareto_time_chart(logic.time_allocation(
-            {**team, "build_pct": bpct, "effort_hours": new_effort}))
+    # ---- Where the hours actually went (Pareto) -----------------------------
+    _pareto_time_chart(logic.hours_breakdown(team))
+    st.caption("This shows where the founder & team's hours **actually** go this round — it "
+               "updates as you buy experiments, train, or hire. Spend deliberately; unused hours "
+               "are lost when the round advances.")
 
     skills = db.get_team_skills(team["id"])
     boosts = logic.hire_boost(team["id"])
@@ -1154,7 +1150,7 @@ def experiments(team):
             ("Decision rule", "What you'll DO for each outcome — persevere, pivot, or stop."),
         ],
     )
-    team = _refresh_team(team["id"])
+    team = logic.sync_round_hours(_refresh_team(team["id"]))
     _resource_bar(team)
 
     assums = db.list_assumptions(team["id"])

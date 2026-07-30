@@ -535,6 +535,7 @@ def invest_training(team_id, skill_key, hours):
         description=f"Trained {content.FOUNDER_SKILL_BY_KEY[skill_key]['name']}")
     if not ok:
         return False, msg
+    _add_usage(team_id, "spent_train", hours)
     gained = add_skill_progress(team_id, skill_key, hours)
     name = content.FOUNDER_SKILL_BY_KEY[skill_key]["name"]
     if gained:
@@ -587,6 +588,8 @@ def hire_specialist(team_id, skill_key, kind):
     if not ok:
         return False, f"{msg} (hiring needs ${opt['upfront']:.0f} and {recruit}h to recruit.)"
     db.add_hire(team_id, skill_key, role, kind, opt["boost"], opt["per_round"], manage)
+    if recruit:
+        _add_usage(team_id, "spent_other", recruit)
     return True, (f"Hired a {opt['label'].lower()} {role} (+{opt['boost']} {role}). "
                   f"Ongoing: ${opt['per_round']:.0f}/round and {manage}h/round to manage.")
 
@@ -660,11 +663,54 @@ def round_hours_budget(team):
     return max(0, eff - admin_hours(team) - management_hours(team["id"]))
 
 
+def sync_round_hours(team):
+    """Ensure a team's available hours match THIS round's budget. Resets once per
+    round (unused hours are lost) and clears the per-round usage counters. Robust to
+    migrations and marker gaps — the source of truth is the round the hours belong to."""
+    cur = db.current_round()
+    if int(team.get("hours_round") or 0) != cur:
+        db.update_team(team["id"], founder_hours=round_hours_budget(team), hours_round=cur,
+                       spent_build=0, spent_train=0, spent_other=0)
+        return db.get_team(team["id"])
+    return team
+
+
+def _add_usage(team_id, field, hours):
+    """Increment a per-round hours-usage counter (spent_build/train/other)."""
+    cur = db.get_team(team_id).get(field) or 0
+    db.update_team(team_id, **{field: cur + hours})
+
+
+def hours_breakdown(team):
+    """Where the founder's productive week actually went this round, plus each hire's
+    own working hours. Returns [(label, hours)] that sums to the productive week."""
+    cats = [
+        ("Admin", admin_hours(team)),
+        ("Managing hires", int(management_hours(team["id"]))),
+        ("Building (experiments)", int(team.get("spent_build") or 0)),
+        ("Training", int(team.get("spent_train") or 0)),
+        ("Hiring", int(team.get("spent_other") or 0)),
+        ("Available", int(team.get("founder_hours") or 0)),
+    ]
+    for h in db.list_hires(team["id"]):
+        kind = "FT" if h["kind"] == "full_time" else "PT"
+        cats.append((f"{kind} {h['role']}",
+                     int(content.HIRE_OPTIONS.get(h["kind"], {}).get("work_hours", 0))))
+    return cats
+
+
 def set_effort(team_id, raw):
-    """Set how hard the founder works this week and reset this round's hours to match."""
+    """Set how hard the founder works this week. Preserves hours already spent this
+    round (changing effort doesn't refill), then applies the new budget."""
     raw = max(content.FULL_PRODUCTIVITY_HOURS, min(content.MAX_WEEKLY_HOURS, int(raw)))
+    team = db.get_team(team_id)
+    old_budget = round_hours_budget(team)
+    spent = max(0, old_budget - (team["founder_hours"] or 0))
     db.update_team(team_id, effort_hours=raw)
-    db.update_team(team_id, founder_hours=round_hours_budget(db.get_team(team_id)))
+    team = db.get_team(team_id)
+    new_budget = round_hours_budget(team)
+    db.update_team(team_id, founder_hours=max(0, new_budget - spent),
+                   hours_round=db.current_round())
     db.set_ack(team_id, "time_plan_set")
 
 
@@ -688,15 +734,14 @@ def time_allocation(team):
     build = int(round(disc * bpct / 100))
     learn = disc - build
     cats = [
-        ("Founder · Building the business", build),
-        ("Founder · Learning & training", learn),
-        ("Founder · Managing team", int(management_hours(team["id"]))),
-        ("Founder · Admin & overhead", admin_hours(team)),
+        ("Building", build),
+        ("Learning", learn),
+        ("Managing", int(management_hours(team["id"]))),
+        ("Admin", admin_hours(team)),
     ]
     for h in db.list_hires(team["id"]):
-        opt = content.HIRE_OPTIONS.get(h["kind"], {})
-        label = f"{opt.get('label', h['kind'])} {h['role']}"
-        cats.append((label, int(opt.get("work_hours", 0))))
+        kind = "FT" if h["kind"] == "full_time" else "PT"
+        cats.append((f"{kind} {h['role']}", int(content.HIRE_OPTIONS.get(h["kind"], {}).get("work_hours", 0))))
     return cats
 
 
@@ -733,8 +778,7 @@ def on_round_change(new_round):
         # learning from each round that just finished
         for r in range(marker, new_round):
             _apply_round_learning(t["id"], r)
-        # reset available hours to this week's budget (no accumulation)
-        db.update_team(t["id"], founder_hours=round_hours_budget(t))
+        # (available hours reset lazily via sync_round_hours when a team next loads)
         # charge salaries for each round passed
         salary = sum((h["per_round"] or 0) for h in db.list_hires(t["id"]))
         if salary:
@@ -838,6 +882,7 @@ def purchase_experiment(team_id, card, assumption_id, hypothesis, metric,
         card["credits"], card["strength"], hypothesis, metric,
         success_threshold, failure_threshold, decision_rule,
     )
+    _add_usage(team_id, "spent_build", card["hours"])
     return True, "Experiment purchased and designed.", exp_id
 
 
