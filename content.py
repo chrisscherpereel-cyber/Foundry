@@ -217,11 +217,15 @@ SPECIALIST_ROLES = {
 # is real founder time that then can't go to building or training.
 HIRE_OPTIONS = {
     "part_time": {"label": "Part-time", "boost": 2, "upfront": 150, "per_round": 80,
-                  "recruit_hours": 5, "manage_hours": 4},
+                  "recruit_hours": 5, "manage_hours": 4, "work_hours": 20},
     "full_time": {"label": "Full-time", "boost": 3, "upfront": 400, "per_round": 200,
-                  "recruit_hours": 10, "manage_hours": 8},
+                  "recruit_hours": 10, "manage_hours": 8, "work_hours": 40},
 }
 HIRE_SKILL_CAP = 5   # effective skill (founder + hires) can't exceed this
+
+# Share of the founder's productive week eaten by unavoidable admin/coordination
+# (email, logistics, running the business) before any building or learning.
+ADMIN_OVERHEAD_PCT = 0.20
 
 # Which founder skills each stage/topic leans on most (drives hiring hints).
 TOPIC_SKILL_NEEDS = {
@@ -595,12 +599,14 @@ CURRICULUM_TOPICS = [
         "key": "founder_formation",
         "title": "Founder formation",
         "concepts": ["Entrepreneurial opportunity vs. idea", "Founder means & constraints",
-                     "Effectuation: bird-in-hand"],
+                     "Effectuation: bird-in-hand", "Founder & team time allocation"],
         "objectives": ["Inventory your team's means (who you are, what you know, whom you know).",
                         "Distinguish an opportunity territory from a product idea.",
-                        "Frame decisions as constrained by money, time, and capability."],
-        "class_focus": "What an entrepreneurial opportunity is, and why means come before ideas.",
-        "sim_task": "Review your founder card and territory; set up your team.",
+                        "Plan how the founder's weekly time is split across activities."],
+        "class_focus": "What an entrepreneurial opportunity is, why means come before ideas, and "
+                       "how founders spend a finite week across running the business, learning, "
+                       "and managing people.",
+        "sim_task": "Review your founder card & territory, and set your founder time allocation.",
         "tool": "Founder & Opportunity", "introduces": ["Founder & Opportunity"], "canvas": None,
     },
     {
@@ -778,6 +784,8 @@ TOPIC_DELIVERABLES = {
     "founder_formation": [
         {"label": "Review your founder card & territory, then mark it reviewed",
          "check": "ack_founder_review", "tool": "Founder & Opportunity", "must_update": True},
+        {"label": "Set your founder time allocation for the week",
+         "check": "time_plan_set", "tool": "Founder & Team", "must_update": True},
     ],
     "opportunity_framing": [
         {"label": "Add and score at least 3 candidate ventures",
@@ -875,6 +883,13 @@ CONCEPT_LIBRARY = {
         ("Expert entrepreneurs start with available means and affordable loss rather than a fixed "
          "goal and predicted returns.",
          "What could you start testing this week using only what you already have?"),
+    "Founder & team time allocation":
+        ("A founder's week is finite. Beyond unavoidable admin/coordination and time spent "
+         "managing any hires, the rest is split between RUNNING the business (customer discovery, "
+         "experiments, canvases) and LEARNING (training + learning by doing). Allocating that "
+         "time deliberately — and re-allocating as you learn — is a core founder skill.",
+         "For this week, roughly what share of the founder's time should go to building vs. "
+         "learning, and why?"),
     "Opportunity portfolio":
         ("Holding several possible ventures at once, instead of committing to the first idea, so "
          "you can compare them.",

@@ -319,6 +319,7 @@ def init_db():
     try:
         conn.executescript(SCHEMA)
         _ensure_column(conn, "teams", "hours_per_round", "REAL DEFAULT 60")
+        _ensure_column(conn, "teams", "build_pct", "INTEGER DEFAULT 60")
         _ensure_column(conn, "hires", "manage_hours", "REAL DEFAULT 0")
         # Seed default settings once.
         cur = conn.execute("SELECT value FROM settings WHERE key='current_round'")

@@ -54,6 +54,37 @@ def _refresh_team(team_id):
     return db.get_team(team_id)
 
 
+def _pareto_time_chart(cats):
+    """Pareto chart (sorted bars + cumulative % line) of time-by-activity."""
+    data = [(l, h) for l, h in cats if h and h > 0]
+    if not data:
+        st.caption("No time to show yet — set an allocation.")
+        return
+    try:
+        import pandas as pd
+        import altair as alt
+    except Exception:
+        # Fallback: simple table if charting libs are unavailable.
+        st.table([{"Activity": l, "Hours": h} for l, h in
+                  sorted(data, key=lambda x: -x[1])])
+        return
+    df = pd.DataFrame(data, columns=["Activity", "Hours"]).sort_values(
+        "Hours", ascending=False).reset_index(drop=True)
+    total = df["Hours"].sum()
+    df["Cumulative %"] = (df["Hours"].cumsum() / total * 100).round(0)
+    order = list(df["Activity"])
+    base = alt.Chart(df).encode(
+        x=alt.X("Activity:N", sort=order, axis=alt.Axis(labelAngle=-35, title=None)))
+    bars = base.mark_bar(color="#2b6cb0").encode(
+        y=alt.Y("Hours:Q", title="Hours / week"),
+        tooltip=["Activity", "Hours"])
+    line = base.mark_line(point=True, color="#f2a938").encode(
+        y=alt.Y("Cumulative %:Q", axis=alt.Axis(title="Cumulative %"), scale=alt.Scale(domain=[0, 100])),
+        tooltip=["Activity", "Cumulative %"])
+    st.altair_chart((bars + line).resolve_scale(y="independent").properties(height=260),
+                    use_container_width=True)
+
+
 def _shade_row(label, done, must_update):
     """One shaded checklist row (green = done, amber = required-incomplete)."""
     if done:
@@ -360,18 +391,44 @@ def founder_skills(team):
     cur = db.current_round()
     raw = logic.weekly_hours(team)
     eff = logic.productive_hours(raw)
-    mgmt = logic.management_hours(team["id"])
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Hours available now", f"{team['founder_hours']:.0f}",
-              help="Spend on experiments (building), training, or hiring. Resets each round; "
-                   "unused hours are lost.")
-    m2.metric("Weekly budget", f"{raw:.0f} raw → {eff} productive",
+    admin = logic.admin_hours(team)
+    mgmt = int(logic.management_hours(team["id"]))
+    disc = logic.round_hours_budget(team)
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Weekly hours", f"{raw:.0f} → {eff} productive",
               help="Founders work long weeks (max 80h) but productivity drops past 40h.")
-    m3.metric("Management time", f"-{mgmt:.0f} hrs/round",
-              help="Managing your hires each round leaves less time to build or train.")
+    m2.metric("Admin & overhead", f"-{admin} hrs",
+              help="Unavoidable running-the-business time each round (before building/learning).")
+    m3.metric("Managing team", f"-{mgmt} hrs",
+              help="Time spent managing your hires each round.")
+    m4.metric("Discretionary", f"{disc} hrs",
+              help="What's left to split between building the business and learning/training.")
     salary = sum((h["per_round"] or 0) for h in db.list_hires(team["id"]))
     if salary:
         st.caption(f"💸 Specialist salaries: **${salary:,.0f}/round** (charged from capital).")
+
+    # ---- Time allocation planner + Pareto chart -----------------------------
+    st.divider()
+    st.write("### ⏱️ Founder time allocation")
+    st.caption("Plan how the founder's week is used. Admin and managing hires are fixed; you "
+               "choose how the DISCRETIONARY hours split between building the business and "
+               "learning/training. Re-allocate any round as you learn.")
+    a1, a2 = st.columns([2, 3])
+    with a1:
+        bpct = st.slider("Building vs. learning (share of discretionary time to building)",
+                         0, 100, logic.get_build_pct(team), 5,
+                         help="Higher = more time running experiments/customer work; lower = "
+                              "more time training and learning.")
+        build_h = int(round(disc * bpct / 100))
+        st.caption(f"→ Building **{build_h} hrs** · Learning **{disc - build_h} hrs** "
+                   f"· Admin {admin} · Managing {mgmt}")
+        if st.button("Save time allocation"):
+            logic.set_build_pct(team["id"], bpct)
+            st.success("Allocation saved. (Round-1 deliverable ✓)")
+            st.rerun()
+    with a2:
+        _pareto_time_chart(logic.time_allocation(
+            {**team, "build_pct": bpct}))
 
     skills = db.get_team_skills(team["id"])
     boosts = logic.hire_boost(team["id"])
@@ -606,8 +663,8 @@ def founder_opportunity(team):
                 rc1.markdown(f"**{label}:** {value}")
                 with rc2.popover("❓"):
                     st.markdown(content.FOUNDER_ATTR_HELP[key])
-            st.caption("↳ Grow these skills — or hire specialists to fill the gaps — on the "
-                       "**Founder & Team** page.")
+            st.caption("↳ On the **Founder & Team** page: plan the founder's **time allocation**, "
+                       "grow skills by training, and hire specialists to fill gaps.")
     else:
         st.caption("The Director has not yet assigned a founder card.")
 

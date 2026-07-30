@@ -224,6 +224,8 @@ def _deliverable_done(team_id, check, rnd):
         return True
     if check == "ack_founder_review":
         return db.has_ack(team_id, "founder_review")
+    if check == "time_plan_set":
+        return db.has_ack(team_id, "time_plan_set")
     if check == "ventures_ge_3":
         return len(db.get_ventures(team_id)) >= 3
     if check == "cp_ge_1":
@@ -588,10 +590,47 @@ def weekly_hours(team):
     return team.get("hours_per_round") or content.DEFAULT_HOURS_PER_WEEK
 
 
+def admin_hours(team):
+    """Unavoidable admin/coordination time each round (before building or learning)."""
+    return int(round(productive_hours(weekly_hours(team)) * content.ADMIN_OVERHEAD_PCT))
+
+
 def round_hours_budget(team):
-    """Effective founder-hours available for a round after management overhead."""
+    """Discretionary founder-hours for a round after admin overhead and managing hires."""
     eff = productive_hours(weekly_hours(team))
-    return max(0, eff - management_hours(team["id"]))
+    return max(0, eff - admin_hours(team) - management_hours(team["id"]))
+
+
+def get_build_pct(team):
+    v = team.get("build_pct")
+    return int(v) if v is not None else 60
+
+
+def set_build_pct(team_id, pct):
+    db.update_team(team_id, build_pct=int(max(0, min(100, pct))))
+    db.set_ack(team_id, "time_plan_set")
+
+
+def time_allocation(team):
+    """How the founder's productive week is used, plus each hire's working time.
+
+    Returns a list of (label, hours) suitable for a Pareto chart.
+    """
+    disc = round_hours_budget(team)          # discretionary pool this round
+    bpct = get_build_pct(team)
+    build = int(round(disc * bpct / 100))
+    learn = disc - build
+    cats = [
+        ("Founder · Building the business", build),
+        ("Founder · Learning & training", learn),
+        ("Founder · Managing team", int(management_hours(team["id"]))),
+        ("Founder · Admin & overhead", admin_hours(team)),
+    ]
+    for h in db.list_hires(team["id"]):
+        opt = content.HIRE_OPTIONS.get(h["kind"], {})
+        label = f"{opt.get('label', h['kind'])} {h['role']}"
+        cats.append((label, int(opt.get("work_hours", 0))))
+    return cats
 
 
 # ---- Founder learning-by-doing --------------------------------------------- #
