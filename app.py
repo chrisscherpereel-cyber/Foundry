@@ -14,6 +14,8 @@ Data persists in a local SQLite database (venture_foundry.db).
 Default instructor PIN: foundry  (change it in Director → Round Control).
 """
 
+import os
+
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -24,14 +26,27 @@ import branding
 import views_student as vs
 import views_instructor as vi
 
+# Browser-tab favicon: the Molten V logo (falls back to an emoji if unavailable).
+_ICON_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "favicon.png")
+_PAGE_ICON = "🏭"
+if os.path.exists(_ICON_PATH):
+    try:
+        from PIL import Image
+        _PAGE_ICON = Image.open(_ICON_PATH)
+    except Exception:
+        _PAGE_ICON = _ICON_PATH
+
 st.set_page_config(page_title="Venture Foundry — From hunch to hard evidence",
-                   page_icon="🏭", layout="wide")
+                   page_icon=_PAGE_ICON, layout="wide")
 
 db.init_db()
 # Date/time-based round advance, applied on load. If the round moved forward and
 # the Director enabled it, run the Auto-Director for the new round.
 _prev_round = db.current_round()
 _new_round = logic.maybe_auto_advance()
+# Grant per-round founder time and charge specialist salaries for any rounds
+# reached (idempotent — safe to call every load).
+logic.on_round_change(_new_round)
 if _new_round != _prev_round and logic.auto_flag("auto_run_on_advance", default=False):
     logic.run_autopilot(_new_round)
 
@@ -119,7 +134,7 @@ STUDENT_PAGES = {
     "Concept Check": vs.concept_check,
     "Dashboard": vs.dashboard,
     "Founder & Opportunity": vs.founder_opportunity,
-    "Founder Skills": vs.founder_skills,
+    "Founder & Team": vs.founder_skills,
     "Canvases": vs.canvases,
     "VP Auction": vs.vp_auction,
     "Assumption Map": vs.assumptions,

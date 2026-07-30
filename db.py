@@ -284,13 +284,32 @@ CREATE TABLE IF NOT EXISTS acknowledgments (
     PRIMARY KEY (team_id, key),
     FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS hires (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_id    INTEGER NOT NULL,
+    skill_key  TEXT NOT NULL,
+    role       TEXT,
+    kind       TEXT,          -- part_time | full_time
+    boost      INTEGER DEFAULT 0,
+    per_round  REAL DEFAULT 0,
+    created_at TEXT,
+    FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
+);
 """
+
+
+def _ensure_column(conn, table, column, decl):
+    cols = [r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+    if column not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
 def init_db():
     conn = get_conn()
     try:
         conn.executescript(SCHEMA)
+        _ensure_column(conn, "teams", "hours_per_round", "REAL DEFAULT 40")
         # Seed default settings once.
         cur = conn.execute("SELECT value FROM settings WHERE key='current_round'")
         if cur.fetchone() is None:
@@ -351,17 +370,21 @@ def current_round():
 # Teams
 # --------------------------------------------------------------------------- #
 def create_team(name, opportunity="", founder_card=None, capital=2000,
-                evidence_credits=10, founder_hours=120, market_potential=1000000):
+                evidence_credits=10, founder_hours=40, market_potential=1000000,
+                hours_per_round=None):
     conn = get_conn()
     try:
         code = secrets.token_hex(3).upper()
+        # `founder_hours` here is the per-round time budget; teams start with one
+        # round's worth and are topped up each round.
+        hpr = hours_per_round if hours_per_round is not None else founder_hours
         cur = conn.execute(
             """INSERT INTO teams(name, join_code, opportunity, founder_card, ventures,
                                  capital, evidence_credits, venture_tokens, founder_hours,
-                                 market_potential, created_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                                 market_potential, hours_per_round, created_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
             (name, code, opportunity, _dumps(founder_card or {}), _dumps([]),
-             capital, evidence_credits, 100, founder_hours, market_potential, now()),
+             capital, evidence_credits, 100, founder_hours, market_potential, hpr, now()),
         )
         team_id = cur.lastrowid
         # Seed structured founder skills from the card archetype.
@@ -1222,5 +1245,42 @@ def has_ack(team_id, key):
             "SELECT 1 FROM acknowledgments WHERE team_id=? AND key=?", (team_id, key)
         ).fetchone()
         return row is not None
+    finally:
+        conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# Hires — specialists filling skill gaps
+# --------------------------------------------------------------------------- #
+def add_hire(team_id, skill_key, role, kind, boost, per_round):
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """INSERT INTO hires(team_id, skill_key, role, kind, boost, per_round, created_at)
+               VALUES(?,?,?,?,?,?,?)""",
+            (team_id, skill_key, role, kind, boost, per_round, now()),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def list_hires(team_id):
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM hires WHERE team_id=? ORDER BY id", (team_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def remove_hire(hire_id):
+    conn = get_conn()
+    try:
+        conn.execute("DELETE FROM hires WHERE id=?", (hire_id,))
+        conn.commit()
     finally:
         conn.close()

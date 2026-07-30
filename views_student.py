@@ -338,40 +338,116 @@ def concept_check(team):
 # Founder Skills — what the team has, and training it up
 # --------------------------------------------------------------------------- #
 def founder_skills(team):
-    st.subheader("🛠️ Founder Skills")
+    st.subheader("🛠️ Founder & Team")
     _guide(
-        "These are your team's capabilities. Each skill has a clear meaning and a real effect "
-        "in the simulation — higher skills raise the matching performance dimension and help "
-        "the related work. Your starting levels come from your founder card. You can TRAIN a "
-        "skill up by investing founder-hours; higher levels cost more hours, so choose where to "
-        "build strength.",
+        "Your founders can't be great at everything. Each round the founder has a limited amount "
+        "of time to split between BUILDING the business (experiments, canvases) and TRAINING "
+        "skills — and time refills a bit each round because the founder keeps working. When a "
+        "skill the venture needs is weak, you can HIRE a specialist part-time or full-time to "
+        "fill the gap (for money instead of the founder's time). Your EFFECTIVE skill = founder "
+        "level + any hires.",
         terms=[
-            ("Skill level", "0 (none) to 5 (expert). Shown as the bar below."),
-            ("Effect", "What the skill does in the sim — see each skill's note."),
-            ("Training", "Spend founder-hours to raise a skill by one level."),
+            ("Founder-time per round", "Hours the founder gains each round to build or train."),
+            ("Training", "Spend founder-hours to raise a skill; you can undo it for a refund."),
+            ("Hiring", "Pay a specialist (upfront + salary) to raise a skill you lack."),
+            ("Effective skill", "Founder level + hired boost — what actually counts (cap 5)."),
         ],
     )
     team = _refresh_team(team["id"])
-    st.metric("Founder-hours available (used to train)", f"{team['founder_hours']:.0f}")
-    skills = db.get_team_skills(team["id"])
+    cur = db.current_round()
+    hpr = team.get("hours_per_round") or content.DEFAULT_HOURS_PER_ROUND
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Founder-hours available", f"{team['founder_hours']:.0f}",
+              help="Spent on experiments (building) AND training. Refills ~"
+                   f"{hpr:.0f}/round.")
+    m2.metric("Time per round", f"+{hpr:.0f} hrs",
+              help="Added at the start of each new round — the founder keeps working.")
+    salary = sum((h["per_round"] or 0) for h in db.list_hires(team["id"]))
+    m3.metric("Specialist salaries", f"${salary:,.0f}/round",
+              help="Ongoing cost of your hires, charged from capital each round.")
 
-    st.write("### What your team has")
+    skills = db.get_team_skills(team["id"])
+    boosts = logic.hire_boost(team["id"])
+    needs = set(logic.skills_needed_this_round(cur))
+
+    if needs:
+        need_names = ", ".join(content.FOUNDER_SKILL_BY_KEY[k]["name"] for k in needs)
+        st.info(f"🎯 **This round leans on:** {need_names}. If your effective level is low there, "
+                "consider training or hiring.")
+
+    st.write("### Your team's skills")
     for s in content.FOUNDER_SKILLS:
-        lvl = skills.get(s["key"], 0)
+        base = skills.get(s["key"], 0)
+        boost = boosts.get(s["key"], 0)
+        eff = min(content.HIRE_SKILL_CAP, base + boost)
+        needed = s["key"] in needs
+        gap = needed and eff <= 2
         with st.container(border=True):
             c1, c2 = st.columns([3, 1])
-            c1.markdown(f"**{s['name']}** — level {lvl}/{content.SKILL_MAX}")
-            c1.progress(lvl / content.SKILL_MAX)
+            title = f"**{s['name']}** — founder {base}/{content.SKILL_MAX}"
+            if boost:
+                title += f"  ·  +{boost} hired → **effective {eff}**"
+            if needed:
+                title += "  · 🎯 needed now"
+            c1.markdown(title)
+            c1.progress(eff / content.SKILL_MAX)
             c1.caption(f"_{s['definition']}_")
             c1.caption(f"Effect: {s['effect']}  ·  Supports **{s['dimension']}**.")
-            if lvl >= content.SKILL_MAX:
+            if gap:
+                c1.caption("⚠️ This is needed this round but weak — train it or hire in.")
+            # Train / undo controls
+            if base >= content.SKILL_MAX:
                 c2.success("Maxed")
             else:
-                cost = logic.skill_train_cost(lvl)
-                if c2.button(f"Train +1\n({cost} hrs)", key=f"train_{s['key']}"):
+                cost = logic.skill_train_cost(base)
+                if c2.button(f"Train +1 ({cost} hrs)", key=f"train_{s['key']}"):
                     ok, msg = logic.train_skill(team["id"], s["key"])
                     (st.success if ok else st.error)(msg)
                     st.rerun()
+            if base > logic._card_base_level(team["id"], s["key"]):
+                if c2.button("Undo training", key=f"untrain_{s['key']}",
+                             help="Revert one trained level and refund the hours."):
+                    ok, msg = logic.untrain_skill(team["id"], s["key"])
+                    (st.success if ok else st.error)(msg)
+                    st.rerun()
+
+    # ---- Hiring -------------------------------------------------------------
+    st.divider()
+    st.write("### Hire specialists to fill gaps")
+    st.caption("Founders rarely have every skill. Hire a specialist to raise a skill you lack — "
+               "part-time is cheaper; full-time gives a bigger boost but a real salary each round.")
+    hire_opts = logic.hire_options()
+    hires = db.list_hires(team["id"])
+    if hires:
+        st.markdown("**On your team:**")
+        for h in hires:
+            hc1, hc2 = st.columns([4, 1])
+            opt = hire_opts.get(h["kind"], {})
+            hc1.markdown(f"- **{opt.get('label', h['kind'])} {h['role']}** "
+                         f"(+{h['boost']} {content.FOUNDER_SKILL_BY_KEY[h['skill_key']]['name']})"
+                         + (f" · ${h['per_round']:.0f}/round" if h["per_round"] else ""))
+            if hc2.button("Let go", key=f"fire_{h['id']}",
+                          help="Remove this hire and stop the salary."):
+                logic.fire_specialist(h["id"])
+                st.rerun()
+
+    with st.form("hire_form", clear_on_submit=True):
+        hc1, hc2 = st.columns(2)
+        skill_key = hc1.selectbox(
+            "Skill to strengthen", content.FOUNDER_SKILL_KEYS,
+            format_func=lambda k: f"{content.SPECIALIST_ROLES[k]} ({content.FOUNDER_SKILL_BY_KEY[k]['name']})",
+            help="Pick the skill you want to raise by hiring.")
+        kind = hc2.selectbox(
+            "Employment", list(hire_opts.keys()),
+            format_func=lambda k: (f"{hire_opts[k]['label']} · +{hire_opts[k]['boost']} skill · "
+                                   f"${hire_opts[k]['upfront']:.0f} upfront"
+                                   + (f" + ${hire_opts[k]['per_round']:.0f}/round"
+                                      if hire_opts[k]['per_round'] else "")),
+            help="Part-time is cheaper with a smaller boost; full-time boosts more but adds a salary.")
+        if st.form_submit_button("Hire specialist"):
+            ok, msg = logic.hire_specialist(team["id"], skill_key, kind)
+            (st.success if ok else st.error)(msg)
+            st.rerun()
 
 
 # --------------------------------------------------------------------------- #
@@ -496,21 +572,32 @@ def founder_opportunity(team):
     card = db.get_founder_card(team["id"])
     st.write("### Your founder card")
     if card:
-        st.markdown(f"#### {card.get('name','—')}")
-        st.caption("Click the ❓ beside any attribute to learn what it means and how it shapes play.")
-        rows = [
-            ("Skills", card.get("skills", "—"), "skills"),
-            ("Networks", card.get("networks", "—"), "networks"),
-            ("Budget you can afford to lose", f"${card.get('budget','—')}", "budget"),
-            ("Founder-hours available", str(card.get("hours", "—")), "hours"),
-            ("Risk tolerance", card.get("risk", "—"), "risk"),
-            ("Ethical boundary", card.get("ethics", "—"), "ethics"),
-        ]
-        for label, value, key in rows:
-            rc1, rc2 = st.columns([20, 1])
-            rc1.markdown(f"**{label}:** {value}")
-            with rc2.popover("❓"):
-                st.markdown(content.FOUNDER_ATTR_HELP[key])
+        with st.container(border=True):
+            hc1, hc2 = st.columns([1, 6])
+            hc1.markdown(
+                "<div style='font-size:44px;text-align:center;line-height:1'>🧑‍🚀</div>",
+                unsafe_allow_html=True)
+            hc2.markdown(f"### {card.get('name','—')}")
+            hc2.caption(f"Founding team · {team['name']} · Risk appetite: "
+                        f"{card.get('risk','—')}")
+            st.caption("Click the ❓ beside any attribute to learn what it means and how it "
+                       "shapes play.")
+            rows = [
+                ("🛠 Skills", card.get("skills", "—"), "skills"),
+                ("🔗 Networks", card.get("networks", "—"), "networks"),
+                ("💵 Budget you can afford to lose", f"${card.get('budget','—')}", "budget"),
+                ("⏳ Founder-time per round", f"{team.get('hours_per_round', card.get('hours','—')):.0f} hours",
+                 "hours"),
+                ("🎲 Risk tolerance", card.get("risk", "—"), "risk"),
+                ("⚖️ Ethical boundary", card.get("ethics", "—"), "ethics"),
+            ]
+            for label, value, key in rows:
+                rc1, rc2 = st.columns([20, 1])
+                rc1.markdown(f"**{label}:** {value}")
+                with rc2.popover("❓"):
+                    st.markdown(content.FOUNDER_ATTR_HELP[key])
+            st.caption("↳ Grow these skills — or hire specialists to fill the gaps — on the "
+                       "**Founder & Team** page.")
     else:
         st.caption("The Director has not yet assigned a founder card.")
 

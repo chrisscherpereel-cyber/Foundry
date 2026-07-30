@@ -419,19 +419,75 @@ def canvas_editable(ctype, rnd, team_id=None):
 
 
 # ---- Founder / team skills ------------------------------------------------- #
+def hire_boost(team_id):
+    """Total hired boost per skill key."""
+    out = {}
+    for h in db.list_hires(team_id):
+        out[h["skill_key"]] = out.get(h["skill_key"], 0) + (h["boost"] or 0)
+    return out
+
+
+def effective_skill(team_id, skill_key, skills=None, boosts=None):
+    """Founder level + hired boost for a skill, capped at HIRE_SKILL_CAP."""
+    skills = skills if skills is not None else db.get_team_skills(team_id)
+    boosts = boosts if boosts is not None else hire_boost(team_id)
+    return min(content.HIRE_SKILL_CAP, skills.get(skill_key, 0) + boosts.get(skill_key, 0))
+
+
 def skill_bonus(team_id):
-    """Score bonus per dashboard dimension from the team's founder skills."""
+    """Score bonus per dashboard dimension from EFFECTIVE skills (founder + hires)."""
     bonus = {}
     skills = db.get_team_skills(team_id)
+    boosts = hire_boost(team_id)
     for s in content.FOUNDER_SKILLS:
-        lvl = skills.get(s["key"], 0)
+        lvl = effective_skill(team_id, s["key"], skills, boosts)
         bonus[s["dimension"]] = bonus.get(s["dimension"], 0) + lvl * 3
     return bonus
 
 
+# ---- Economy / balance settings (Director-tunable, with defaults) ---------- #
+_ECON_DEFAULTS = {
+    "train_mult": 10.0,
+    "pt_boost": 2, "pt_upfront": 150.0, "pt_per_round": 80.0,
+    "ft_boost": 3, "ft_upfront": 400.0, "ft_per_round": 200.0,
+}
+
+
+def _econ(key):
+    raw = db.get_setting("econ_" + key)
+    if raw in (None, ""):
+        return _ECON_DEFAULTS[key]
+    try:
+        return type(_ECON_DEFAULTS[key])(float(raw))
+    except (TypeError, ValueError):
+        return _ECON_DEFAULTS[key]
+
+
+def get_economy():
+    """Current economy config (Director overrides merged over defaults)."""
+    return {k: _econ(k) for k in _ECON_DEFAULTS}
+
+
+def set_economy(values):
+    for k in _ECON_DEFAULTS:
+        if k in values and values[k] is not None:
+            db.set_setting("econ_" + k, values[k])
+
+
+def hire_options():
+    """Hire options built from the current economy settings."""
+    e = get_economy()
+    return {
+        "part_time": {"label": "Part-time", "boost": int(e["pt_boost"]),
+                      "upfront": e["pt_upfront"], "per_round": e["pt_per_round"]},
+        "full_time": {"label": "Full-time", "boost": int(e["ft_boost"]),
+                      "upfront": e["ft_upfront"], "per_round": e["ft_per_round"]},
+    }
+
+
 def skill_train_cost(level):
     """Founder-hours to raise a skill from `level` to level+1 (rising cost)."""
-    return (level + 1) * 20
+    return int((level + 1) * _econ("train_mult"))
 
 
 def train_skill(team_id, skill_key):
@@ -448,6 +504,84 @@ def train_skill(team_id, skill_key):
         return False, msg
     db.set_skill_level(team_id, skill_key, lvl + 1)
     return True, f"Trained to level {lvl + 1} (spent {cost} founder-hours)."
+
+
+def _card_base_level(team_id, skill_key):
+    card = db.get_founder_card(team_id)
+    return content.card_skill_levels(card.get("name", "")).get(skill_key, 1)
+
+
+def untrain_skill(team_id, skill_key):
+    """Reverse one level of training, refunding the hours. Won't go below the
+    founder card's starting level. Returns (ok, message)."""
+    skills = db.get_team_skills(team_id)
+    lvl = skills.get(skill_key, 1)
+    base = _card_base_level(team_id, skill_key)
+    if lvl <= base:
+        return False, "This is the founder's starting level — nothing trained to undo."
+    refund = skill_train_cost(lvl - 1)
+    db.adjust_resources(team_id, hours=refund, kind="training_undo",
+                        description=f"Undid training: {content.FOUNDER_SKILL_BY_KEY[skill_key]['name']}",
+                        allow_negative=True)
+    db.set_skill_level(team_id, skill_key, lvl - 1)
+    return True, f"Reverted to level {lvl - 1} (refunded {refund} founder-hours)."
+
+
+# ---- Hiring ---------------------------------------------------------------- #
+def hire_specialist(team_id, skill_key, kind):
+    """Hire a part-time or full-time specialist for a skill. Charges the upfront
+    cost now; the per-round salary is charged when the round advances."""
+    opt = hire_options().get(kind)
+    if not opt:
+        return False, "Unknown employment type."
+    role = content.SPECIALIST_ROLES.get(skill_key, "Specialist")
+    ok, msg = db.adjust_resources(
+        team_id, money=-opt["upfront"], kind="hire",
+        description=f"Hired {opt['label']} {role}")
+    if not ok:
+        return False, msg
+    db.add_hire(team_id, skill_key, role, kind, opt["boost"], opt["per_round"])
+    extra = f" · salary ${opt['per_round']}/round" if opt["per_round"] else ""
+    return True, f"Hired a {opt['label'].lower()} {role} (+{opt['boost']} {role} skill){extra}."
+
+
+def fire_specialist(hire_id):
+    db.remove_hire(hire_id)
+
+
+def skills_needed_this_round(rnd):
+    """Founder skills the current round leans on most (union across its topics)."""
+    needs = []
+    for tp in topics_for_round(rnd):
+        for k in content.TOPIC_SKILL_NEEDS.get(tp["key"], []):
+            if k not in needs:
+                needs.append(k)
+    return needs
+
+
+# ---- Per-round time & salary ----------------------------------------------- #
+def on_round_change(new_round):
+    """Grant each team its per-round founder-hours for every round newly reached,
+    and charge full-/part-time salaries once per new round. Idempotent via a marker."""
+    try:
+        marker = int(db.get_setting("hours_marker", "1"))
+    except (TypeError, ValueError):
+        marker = 1
+    if new_round <= marker:
+        return
+    rounds_passed = new_round - marker
+    for t in db.list_teams():
+        hpr = t.get("hours_per_round") or content.DEFAULT_HOURS_PER_ROUND
+        # grant time for each new round
+        db.adjust_resources(t["id"], hours=hpr * rounds_passed, kind="hours",
+                            description=f"Founder time for {rounds_passed} round(s)",
+                            allow_negative=True)
+        # charge salaries for each new round
+        salary = sum((h["per_round"] or 0) for h in db.list_hires(t["id"]))
+        if salary:
+            db.adjust_resources(t["id"], money=-salary * rounds_passed, kind="salary",
+                                description="Specialist salaries", allow_negative=True)
+    db.set_setting("hours_marker", new_round)
 
 
 def _parse_dt(text):
@@ -662,6 +796,7 @@ def quick_setup_teams(n_teams, difficulty, opportunity_mode="distinct",
             name, territory, base_card,
             capital=preset["capital"], evidence_credits=preset["credits"],
             founder_hours=preset["hours"], market_potential=preset["market_potential"],
+            hours_per_round=preset["hours"],
         )
         created.append({"name": name, "code": code, "territory": territory})
     return created

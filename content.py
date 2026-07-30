@@ -96,33 +96,33 @@ BALANCED_FOUNDER_CARD = {
 
 # --------------------------------------------------------------------------- #
 # Difficulty levels — set the starting resources every team receives.
-# Higher difficulty = leaner cash, credits, hours, and a lower market ceiling,
-# so teams must be more disciplined. Every team in a cohort uses the SAME level,
-# which is what keeps their odds of success equal.
+# `hours` is now the founder's TIME PER ROUND (not a whole-term pool): each round
+# the founder gets this many hours to split between BUILDING the business
+# (experiments, canvases) and TRAINING skills. Unused hours carry over. Higher
+# difficulty = leaner cash, credits, and time per round, and a lower market ceiling.
+# Every team in a cohort uses the SAME level, which keeps their odds equal.
 # --------------------------------------------------------------------------- #
 DIFFICULTY_ORDER = ["Novice", "Easy", "Standard", "Hard", "Expert"]
 DIFFICULTY_LEVELS = {
     "Novice": {
-        "capital": 6000, "credits": 30, "hours": 200, "market_potential": 1_500_000,
-        "blurb": "Very forgiving. Generous cash, credits, and time — good for a first "
-                 "run or a short course where you want teams to experiment freely.",
+        "capital": 6000, "credits": 30, "hours": 60, "market_potential": 1_500_000,
+        "blurb": "Very forgiving. Generous cash, credits, and ~60 founder-hours per round.",
     },
     "Easy": {
-        "capital": 4500, "credits": 20, "hours": 160, "market_potential": 1_250_000,
-        "blurb": "Comfortable resources with a little pressure. Mistakes are recoverable.",
+        "capital": 4500, "credits": 20, "hours": 50, "market_potential": 1_250_000,
+        "blurb": "Comfortable resources with a little pressure. ~50 hours per round.",
     },
     "Standard": {
-        "capital": 3000, "credits": 12, "hours": 120, "market_potential": 1_000_000,
-        "blurb": "The default balance. Teams must prioritize which assumptions to test.",
+        "capital": 3000, "credits": 12, "hours": 40, "market_potential": 1_000_000,
+        "blurb": "The default balance. ~40 founder-hours per round to build and train.",
     },
     "Hard": {
-        "capital": 2000, "credits": 8, "hours": 100, "market_potential": 800_000,
-        "blurb": "Scarce resources. Every experiment purchase is a real trade-off.",
+        "capital": 2000, "credits": 8, "hours": 32, "market_potential": 800_000,
+        "blurb": "Scarce resources. ~32 hours per round — every choice is a trade-off.",
     },
     "Expert": {
-        "capital": 1200, "credits": 5, "hours": 80, "market_potential": 600_000,
-        "blurb": "Ruthless scarcity. Only the cheapest, highest-learning experiments "
-                 "survive — best for advanced or capstone students.",
+        "capital": 1200, "credits": 5, "hours": 24, "market_potential": 600_000,
+        "blurb": "Ruthless scarcity. ~24 hours per round; build or train, rarely both.",
     },
 }
 
@@ -182,6 +182,53 @@ def card_skill_levels(card_name):
     """Starting skill levels for a founder card (defaults to 1 for unlisted skills)."""
     overrides = FOUNDER_CARD_SKILLS.get(card_name, {})
     return {k: int(overrides.get(k, 1)) for k in FOUNDER_SKILL_KEYS}
+
+
+# --------------------------------------------------------------------------- #
+# Hiring — founders rarely have every skill. When a skill the venture needs is
+# weak, teams can HIRE a specialist (part-time or full-time). A hire raises the
+# team's EFFECTIVE level in that skill (founder level + hire boost, capped at 5).
+#   • Part-time: cheaper upfront, small ongoing cost, modest boost.
+#   • Full-time: bigger boost, higher upfront + a real salary each round (burn).
+# Firing stops the ongoing cost and removes the boost.
+# --------------------------------------------------------------------------- #
+SPECIALIST_ROLES = {
+    "customer_research": "Customer Researcher",
+    "design": "Product Designer",
+    "technical": "Software Engineer",
+    "sales": "Sales & Growth Lead",
+    "finance": "Finance Analyst",
+    "operations": "Operations Manager",
+    "responsible": "Ethics & Privacy Advisor",
+}
+
+HIRE_OPTIONS = {
+    "part_time": {"label": "Part-time", "boost": 2, "upfront": 150, "per_round": 80},
+    "full_time": {"label": "Full-time", "boost": 3, "upfront": 400, "per_round": 200},
+}
+HIRE_SKILL_CAP = 5   # effective skill (founder + hires) can't exceed this
+
+# Which founder skills each stage/topic leans on most (drives hiring hints).
+TOPIC_SKILL_NEEDS = {
+    "founder_formation": [],
+    "opportunity_framing": ["customer_research"],
+    "customer_discovery": ["customer_research"],
+    "customer_evidence": ["customer_research"],
+    "value_creation": ["design"],
+    "value_prop_fit": ["design", "customer_research"],
+    "bmc_architecture": ["technical", "finance"],
+    "assumption_testing": ["operations"],
+    "experiment_design": ["operations", "technical"],
+    "market_testing": ["operations"],
+    "pivot_decisions": ["customer_research"],
+    "business_economics": ["finance"],
+    "scaling": ["sales", "operations"],
+    "investment_readiness": ["finance", "sales"],
+    "venture_market": ["sales", "responsible"],
+}
+
+# Founder time per round, split between building the business and training.
+DEFAULT_HOURS_PER_ROUND = 40
 
 
 # What each founder-card attribute MEANS and how it shapes play (shown on the "?").
@@ -529,7 +576,7 @@ PIVOT_DECISIONS = [
 
 # Tools available from the very first round regardless of topic order.
 BASE_TOOLS = ["Round Briefing", "Inbox", "Concept Check", "Dashboard",
-              "Founder & Opportunity", "Founder Skills", "AI Assist Log", "Decision Journal"]
+              "Founder & Opportunity", "Founder & Team", "AI Assist Log", "Decision Journal"]
 
 CURRICULUM_TOPICS = [
     {
@@ -796,7 +843,7 @@ UNIVERSAL_DELIVERABLE = {
 
 # Tools that are always editable regardless of the round's focus.
 ALWAYS_ACTIVE_TOOLS = ["Round Briefing", "Inbox", "Concept Check", "Dashboard",
-                       "Founder Skills", "Decision Journal", "AI Assist Log"]
+                       "Founder & Team", "Decision Journal", "AI Assist Log"]
 
 # --------------------------------------------------------------------------- #
 # Concept library — a short definition and an "explore it" prompt for every

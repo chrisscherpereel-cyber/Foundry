@@ -437,6 +437,49 @@ def round_control():
             logic.set_auto_flag("strict_round_mode", strict)
             st.success("Round mode saved.")
 
+    # ---- Economy & balance --------------------------------------------------
+    with st.expander("💲 Economy & balance — tune the numbers"):
+        st.caption("Adjust the simulation's costs without editing code. Changes apply "
+                   "immediately to all teams.")
+        econ = logic.get_economy()
+
+        st.markdown("**Founder time**")
+        e1, e2 = st.columns(2)
+        hpr = e1.number_input(
+            "Founder-hours per round (all teams)", 5, 200, int(db.get_setting("econ_hours_per_round", "40") or 40),
+            help="Time each founder gains per round to split between building and training. "
+                 "Saving updates every team and future rounds.")
+        train_mult = e2.number_input(
+            "Training cost per level (hours × level)", 1, 60, int(econ["train_mult"]),
+            help="Founder-hours to raise a skill = (target level) × this. Higher = training is "
+                 "more of a commitment.")
+
+        st.markdown("**Hiring — part-time specialist**")
+        p1, p2, p3 = st.columns(3)
+        pt_boost = p1.number_input("PT skill boost", 1, 5, int(econ["pt_boost"]), key="pt_b")
+        pt_up = p2.number_input("PT upfront $", 0, 5000, int(econ["pt_upfront"]), step=50, key="pt_u")
+        pt_pr = p3.number_input("PT salary $/round", 0, 2000, int(econ["pt_per_round"]), step=20, key="pt_p")
+
+        st.markdown("**Hiring — full-time specialist**")
+        f1, f2, f3 = st.columns(3)
+        ft_boost = f1.number_input("FT skill boost", 1, 5, int(econ["ft_boost"]), key="ft_b")
+        ft_up = f2.number_input("FT upfront $", 0, 8000, int(econ["ft_upfront"]), step=50, key="ft_u")
+        ft_pr = f3.number_input("FT salary $/round", 0, 3000, int(econ["ft_per_round"]), step=20, key="ft_p")
+
+        if st.button("Save economy settings"):
+            logic.set_economy({
+                "train_mult": train_mult,
+                "pt_boost": pt_boost, "pt_upfront": pt_up, "pt_per_round": pt_pr,
+                "ft_boost": ft_boost, "ft_upfront": ft_up, "ft_per_round": ft_pr,
+            })
+            db.set_setting("econ_hours_per_round", int(hpr))
+            for t in db.list_teams():
+                db.update_team(t["id"], hours_per_round=int(hpr))
+            st.success("Economy settings saved and applied to all teams.")
+
+        st.caption(f"Difficulty presets (starting per-round hours) still live in content.py: "
+                   + ", ".join(f"{k} {v['hours']}h" for k, v in content.DIFFICULTY_LEVELS.items()))
+
     st.divider()
     topics = logic.topics_for_round(cur)
     if topics:
