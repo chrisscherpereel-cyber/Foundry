@@ -78,17 +78,16 @@ _VPC = f"""
      role="img" aria-label="Value Proposition Canvas" font-family="Helvetica, Arial, sans-serif">
   <text x="175" y="34" text-anchor="middle" font-size="19" font-weight="700" fill="{INK}">Value Map</text>
   <text x="595" y="34" text-anchor="middle" font-size="19" font-weight="700" fill="{INK}">Customer Profile</text>
-  <!-- square value map -->
+  <!-- square value map: three clean zones, no crossing lines -->
   <rect x="40" y="55" width="290" height="290" rx="10" fill="{BLUE}" stroke="{INK}" stroke-width="2.6"/>
-  <path d="M40 55 L330 345" stroke="{LINE}" stroke-width="1.4" opacity="0.6"/>
-  <path d="M330 55 L40 345" stroke="{LINE}" stroke-width="1.4" opacity="0.6"/>
-  <text x="120" y="120" text-anchor="middle" font-size="14" font-weight="700" fill="{TEAL}">Gain</text>
-  <text x="120" y="138" text-anchor="middle" font-size="14" font-weight="700" fill="{TEAL}">Creators</text>
-  <text x="120" y="290" text-anchor="middle" font-size="14" font-weight="700" fill="{RED}">Pain</text>
-  <text x="120" y="308" text-anchor="middle" font-size="14" font-weight="700" fill="{RED}">Relievers</text>
-  <text x="262" y="197" text-anchor="middle" font-size="13" font-weight="700" fill="{INK}">Products</text>
-  <text x="262" y="214" text-anchor="middle" font-size="13" font-weight="700" fill="{INK}">&amp; Services</text>
-  <rect x="150" y="150" width="26" height="26" rx="3" fill="none" stroke="{INK}" stroke-width="2"/>
+  <line x1="235" y1="55" x2="235" y2="345" stroke="{LINE}" stroke-width="1.4" opacity="0.55"/>
+  <line x1="40" y1="200" x2="235" y2="200" stroke="{LINE}" stroke-width="1.4" opacity="0.55"/>
+  <text x="137" y="122" text-anchor="middle" font-size="15" font-weight="700" fill="{TEAL}">Gain</text>
+  <text x="137" y="141" text-anchor="middle" font-size="15" font-weight="700" fill="{TEAL}">Creators</text>
+  <text x="137" y="272" text-anchor="middle" font-size="15" font-weight="700" fill="{RED}">Pain</text>
+  <text x="137" y="291" text-anchor="middle" font-size="15" font-weight="700" fill="{RED}">Relievers</text>
+  <text x="282" y="193" text-anchor="middle" font-size="12.5" font-weight="700" fill="{INK}">Products</text>
+  <text x="282" y="210" text-anchor="middle" font-size="12.5" font-weight="700" fill="{INK}">&amp; Services</text>
   <!-- fit arrow -->
   <path d="M345 200 L430 200" stroke="{AMBER}" stroke-width="4" marker-end="url(#vparrow)"/>
   <defs><marker id="vparrow" markerWidth="10" markerHeight="10" refX="7" refY="5" orient="auto">

@@ -496,19 +496,31 @@ def founder_opportunity(team):
     card = db.get_founder_card(team["id"])
     st.write("### Your founder card")
     if card:
-        st.info(
-            f"**{card.get('name','—')}**\n\n"
-            f"- Skills: {card.get('skills','—')}\n"
-            f"- Networks: {card.get('networks','—')}\n"
-            f"- Budget you can afford to lose: ${card.get('budget','—')}\n"
-            f"- Founder-hours available: {card.get('hours','—')}\n"
-            f"- Risk tolerance: {card.get('risk','—')}\n"
-            f"- Ethical boundary: {card.get('ethics','—')}"
-        )
+        st.markdown(f"#### {card.get('name','—')}")
+        st.caption("Click the ❓ beside any attribute to learn what it means and how it shapes play.")
+        rows = [
+            ("Skills", card.get("skills", "—"), "skills"),
+            ("Networks", card.get("networks", "—"), "networks"),
+            ("Budget you can afford to lose", f"${card.get('budget','—')}", "budget"),
+            ("Founder-hours available", str(card.get("hours", "—")), "hours"),
+            ("Risk tolerance", card.get("risk", "—"), "risk"),
+            ("Ethical boundary", card.get("ethics", "—"), "ethics"),
+        ]
+        for label, value, key in rows:
+            rc1, rc2 = st.columns([20, 1])
+            rc1.markdown(f"**{label}:** {value}")
+            with rc2.popover("❓"):
+                st.markdown(content.FOUNDER_ATTR_HELP[key])
     else:
         st.caption("The Director has not yet assigned a founder card.")
 
     st.write(f"### Opportunity territory\n**{team['opportunity'] or '—'}**")
+    _guide_terr = content.territory_guide(team["opportunity"] or "")
+    if _guide_terr:
+        with st.expander("💡 Getting started in this territory", expanded=True):
+            st.markdown(_guide_terr)
+            st.caption("This is a starting map, not the answer — go find real customers and let "
+                       "the evidence redraw it.")
 
     st.divider()
     if db.has_ack(team["id"], "founder_review"):

@@ -184,6 +184,87 @@ def card_skill_levels(card_name):
     return {k: int(overrides.get(k, 1)) for k in FOUNDER_SKILL_KEYS}
 
 
+# What each founder-card attribute MEANS and how it shapes play (shown on the "?").
+FOUNDER_ATTR_HELP = {
+    "skills": "**What your team is good at.** Skills that match your venture make experiments "
+              "cheaper and your evidence more credible; gaps are risks to plan around. You can "
+              "grow specific skills on the **Founder Skills** page.",
+    "networks": "**Who you can already reach.** A strong, relevant network gets you interviews, "
+                "pilots, and channel access faster — often your biggest head start on evidence. "
+                "Start customer discovery with the people you can already contact.",
+    "budget": "**The money you can afford to LOSE** (affordable loss), not a forecast of profit. "
+              "Every experiment and pivot spends from here, so always look for the cheapest way "
+              "to learn before committing more.",
+    "hours": "**Founder-time you can invest this term.** Experiments and skill training cost "
+             "hours as well as money. Spend them where the learning per hour is highest.",
+    "risk": "**How much uncertainty your team will take on.** It shapes which bets fit you — a "
+            "low-risk team favors many cheap tests; a high-risk team may run bigger ones. Neither "
+            "is 'right'; be deliberate.",
+    "ethics": "**A line you will not cross.** Some market events will tempt you to break it for "
+              "growth. Holding the line protects your Responsible Innovation score and long-term "
+              "trust; crossing it may cost you both.",
+}
+
+# Starter guidance for each opportunity territory — enough to get a team moving.
+TERRITORY_GUIDE = {
+    "Supporting aging adults living independently":
+        "**Likely customers:** older adults living alone, plus their adult children and "
+        "caregivers (often the buyer isn't the user). **Common pains:** safety fears, isolation, "
+        "medication and appointment management, mobility. **Where to find them:** senior centers, "
+        "community groups, care facilities, family caregivers you know. **Start by:** interviewing "
+        "2–3 caregivers about the last time something went wrong at home.",
+    "Reducing food waste":
+        "**Likely customers:** households, restaurants/cafés, grocers, campus dining. "
+        "**Common pains:** over-buying, spoilage, unsold stock, no easy way to redistribute. "
+        "**Where to find them:** local cafés and grocers, dining halls, food banks. "
+        "**Start by:** asking a café manager how much they throw out each day and why.",
+    "Improving student financial well-being":
+        "**Likely customers:** students (and sometimes parents or the university). **Common "
+        "pains:** budgeting, surprise fees, debt anxiety, low financial literacy. **Where to "
+        "find them:** classmates, student orgs, financial-aid offices. **Start by:** asking five "
+        "students to walk you through their last money stress.",
+    "Helping small local retailers":
+        "**Likely customers:** independent shop owners and their staff. **Common pains:** "
+        "footfall, online competition, inventory, marketing time, payments. **Where to find "
+        "them:** main-street shops, local business associations. **Start by:** asking two owners "
+        "what ate the most of their time last week.",
+    "Increasing access to outdoor recreation":
+        "**Likely customers:** would-be participants, families, and program/park providers. "
+        "**Common pains:** cost, gear, know-how, safety, transport, time. **Where to find them:** "
+        "outdoor clubs, rental shops, park programs. **Start by:** asking people who *want* to go "
+        "outdoors more what stops them.",
+    "Improving employee scheduling":
+        "**Likely customers:** shift managers and hourly workers (buyer vs. user differ). "
+        "**Common pains:** last-minute changes, understaffing, availability conflicts, "
+        "compliance. **Where to find them:** cafés, retail, clinics, gig platforms. **Start by:** "
+        "shadowing a manager building next week's schedule.",
+    "Supporting independent content creators":
+        "**Likely customers:** creators (video, audio, writing, art) at different scales. "
+        "**Common pains:** inconsistent income, admin/editing time, discovery, burnout. **Where "
+        "to find them:** creator communities, local meetups, classmates who post. **Start by:** "
+        "asking three creators where their time actually goes.",
+    "Reducing household energy use":
+        "**Likely customers:** homeowners and renters (renters often can't change hardware). "
+        "**Common pains:** high bills, no visibility, hassle of changing habits, upfront cost. "
+        "**Where to find them:** neighbors, housing groups, utility programs. **Start by:** "
+        "asking households what they've already tried and why it stuck or didn't.",
+    "Improving pet care":
+        "**Likely customers:** pet owners, plus vets, sitters, and shelters. **Common pains:** "
+        "cost, time, health worries, travel/coverage, training. **Where to find them:** dog "
+        "parks, vet clinics, pet-owner groups. **Start by:** asking owners about the last time "
+        "their pet's care was stressful or expensive.",
+    "Reducing administrative work for professionals":
+        "**Likely customers:** busy professionals (clinicians, lawyers, teachers, tradespeople). "
+        "**Common pains:** paperwork, scheduling, billing, compliance, repetitive data entry. "
+        "**Where to find them:** professionals you know, local practices, associations. **Start "
+        "by:** asking one professional to list the admin tasks they resent most.",
+}
+
+
+def territory_guide(territory):
+    return TERRITORY_GUIDE.get(territory)
+
+
 # --------------------------------------------------------------------------- #
 # Evidence-strength ladder — behavior beats opinion
 # --------------------------------------------------------------------------- #
