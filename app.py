@@ -1,5 +1,5 @@
 """
-Venture Foundry — The Evidence Economy
+Venture Foundry — From hunch to hard evidence
 A semester-long entrepreneurship simulation.
 
 Run with:  streamlit run app.py
@@ -24,7 +24,7 @@ import branding
 import views_student as vs
 import views_instructor as vi
 
-st.set_page_config(page_title="Venture Foundry — The Evidence Economy",
+st.set_page_config(page_title="Venture Foundry — From hunch to hard evidence",
                    page_icon="🏭", layout="wide")
 
 db.init_db()

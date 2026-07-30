@@ -11,6 +11,7 @@ import streamlit as st
 import db
 import content
 import logic
+import canvas_art
 
 
 # --------------------------------------------------------------------------- #
@@ -608,51 +609,12 @@ _CANVAS_HELP = {
 }
 
 
-# Decorative schematic drawn above each canvas so it resembles the printed original.
+# High-quality vector illustration drawn above each canvas (see canvas_art.py).
 def _canvas_diagram(ctype):
-    svgs = {
-        "customer_profile":
-            "<svg viewBox='0 0 200 130' width='190' height='124' xmlns='http://www.w3.org/2000/svg'>"
-            "<circle cx='100' cy='65' r='58' fill='#f4f7fc' stroke='#33415c' stroke-width='2'/>"
-            "<line x1='100' y1='65' x2='158' y2='65' stroke='#33415c' stroke-width='1.5'/>"
-            "<line x1='100' y1='65' x2='58' y2='20' stroke='#33415c' stroke-width='1.5'/>"
-            "<line x1='100' y1='65' x2='58' y2='110' stroke='#33415c' stroke-width='1.5'/>"
-            "<circle cx='100' cy='65' r='12' fill='#fff' stroke='#33415c' stroke-width='1.5'/>"
-            "<text x='128' y='58' font-size='9' fill='#33415c'>Jobs</text>"
-            "<text x='60' y='34' font-size='9' fill='#2b9d8f'>Gains</text>"
-            "<text x='60' y='100' font-size='9' fill='#c0562b'>Pains</text></svg>",
-        "vpc":
-            "<svg viewBox='0 0 240 130' width='210' height='114' xmlns='http://www.w3.org/2000/svg'>"
-            "<rect x='8' y='18' width='94' height='94' fill='#f4f7fc' stroke='#33415c' stroke-width='2'/>"
-            "<line x1='55' y1='18' x2='55' y2='112' stroke='#33415c' stroke-width='1'/>"
-            "<circle cx='170' cy='65' r='47' fill='#f4f7fc' stroke='#33415c' stroke-width='2'/>"
-            "<line x1='170' y1='65' x2='217' y2='65' stroke='#33415c' stroke-width='1'/>"
-            "<line x1='170' y1='65' x2='137' y2='30' stroke='#33415c' stroke-width='1'/>"
-            "<line x1='170' y1='65' x2='137' y2='100' stroke='#33415c' stroke-width='1'/>"
-            "<text x='20' y='14' font-size='9' fill='#33415c'>Value Map</text>"
-            "<text x='150' y='14' font-size='9' fill='#33415c'>Customer</text></svg>",
-        "bmc":
-            "<svg viewBox='0 0 300 120' width='250' height='100' xmlns='http://www.w3.org/2000/svg'>"
-            "<g fill='#f4f7fc' stroke='#33415c' stroke-width='1.5'>"
-            "<rect x='4' y='8' width='55' height='78'/><rect x='61' y='8' width='55' height='38'/>"
-            "<rect x='61' y='48' width='55' height='38'/><rect x='118' y='8' width='55' height='78'/>"
-            "<rect x='175' y='8' width='55' height='38'/><rect x='175' y='48' width='55' height='38'/>"
-            "<rect x='232' y='8' width='55' height='78'/>"
-            "<rect x='4' y='88' width='140' height='26'/><rect x='146' y='88' width='141' height='26'/>"
-            "</g></svg>",
-        "environment":
-            "<svg viewBox='0 0 200 150' width='190' height='142' xmlns='http://www.w3.org/2000/svg'>"
-            "<circle cx='100' cy='75' r='66' fill='none' stroke='#9fb3d1' stroke-width='1' stroke-dasharray='3 3'/>"
-            "<circle cx='100' cy='75' r='40' fill='#eef3fb' stroke='#33415c' stroke-width='1.5'/>"
-            "<rect x='84' y='60' width='32' height='30' fill='#fff' stroke='#33415c' stroke-width='1'/>"
-            "<g fill='#2b6cb0'>"
-            "<circle cx='100' cy='9' r='6'/><circle cx='100' cy='141' r='6'/>"
-            "<circle cx='34' cy='40' r='6'/><circle cx='166' cy='40' r='6'/>"
-            "<circle cx='34' cy='110' r='6'/><circle cx='166' cy='110' r='6'/></g></svg>",
-    }
-    svg = svgs.get(ctype)
+    svg = canvas_art.svg(ctype)
     if svg:
-        st.markdown(svg, unsafe_allow_html=True)
+        st.markdown(f"<div style='text-align:center;margin:6px 0 10px;'>{svg}</div>",
+                    unsafe_allow_html=True)
 
 
 def _cbox(parent, title, key, prefill, height=120, hint=""):
@@ -826,11 +788,8 @@ def canvases(team):
         st.info(f"👁️ The {title} belongs to a different round, so it's view-only now "
                 f"(its round is R{unlock}). Your saved versions are shown below.")
 
-    c1, c2 = st.columns([1, 3])
-    with c1:
-        _canvas_diagram(ctype)
-    with c2:
-        st.caption(_CANVAS_HELP[ctype])
+    _canvas_diagram(ctype)
+    st.caption(_CANVAS_HELP[ctype])
 
     existing = db.list_canvases(team["id"], ctype)
     latest = existing[-1] if existing else None

@@ -1,8 +1,9 @@
 """
 branding.py — Venture Foundry visual identity.
 
-Holds the simulation's custom logo (an inline SVG: a foundry hex badge with rising
-"evidence bars" and a spark of insight) and small helpers to render it in the app.
+Holds the simulation's custom logo (an inline SVG: a molten "V" being cast in a
+mold, with a spark of insight) and small helpers to render it in the app.
+Tagline: "From hunch to hard evidence."
 
 IMPORTANT: Streamlit's Markdown renderer treats any line indented 4+ spaces as a
 code block, which would print raw HTML/SVG to the screen. So every string we hand
@@ -11,31 +12,21 @@ to st.markdown is collapsed to a single unindented line via _oneline() before us
 
 import streamlit as st
 
-# Raw logo artwork. Kept multi-line here for readability; _oneline() flattens it
-# before it ever reaches st.markdown. assets/logo.svg holds the same artwork.
+TAGLINE = "From hunch to hard evidence"
+
+# Raw logo artwork (the "Molten V"). Kept multi-line here for readability;
+# _oneline() flattens it before it reaches st.markdown. assets/logo.svg matches.
 _LOGO_SVG = """
 <svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg" role="img"
      aria-label="Venture Foundry logo" width="{w}" height="{w}"
      style="display:block;flex:0 0 auto;">
-  <defs>
-    <linearGradient id="vfBg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#2b3a5c"/><stop offset="1" stop-color="#141c2e"/>
-    </linearGradient>
-    <linearGradient id="vfBar" x1="0" y1="1" x2="0" y2="0">
-      <stop offset="0" stop-color="#2b9d8f"/><stop offset="1" stop-color="#41d3bd"/>
-    </linearGradient>
-    <linearGradient id="vfAmber" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#ffd97a"/><stop offset="1" stop-color="#f5a623"/>
-    </linearGradient>
-  </defs>
-  <path d="M60 5 L106 31 V85 L60 111 L14 85 V31 Z" fill="url(#vfBg)"
-        stroke="url(#vfAmber)" stroke-width="3.5" stroke-linejoin="round"/>
-  <rect x="33" y="82" width="54" height="8" rx="4" fill="#c9d6f0"/>
-  <rect x="40" y="66" width="11" height="16" rx="3" fill="url(#vfBar)"/>
-  <rect x="55" y="54" width="11" height="28" rx="3" fill="url(#vfBar)"/>
-  <rect x="70" y="42" width="11" height="40" rx="3" fill="url(#vfBar)"/>
-  <path d="M78 27 L80.5 33.5 L87 36 L80.5 38.5 L78 45 L75.5 38.5 L69 36 L75.5 33.5 Z"
-        fill="url(#vfAmber)"/>
+  <path d="M34 42 L60 88 L86 42" fill="none" stroke="#f2a938" stroke-width="12"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M28 36 h16 M28 36 v16" fill="none" stroke="#24324d" stroke-width="6"
+        stroke-linecap="round"/>
+  <path d="M92 36 h-16 M92 36 v16" fill="none" stroke="#24324d" stroke-width="6"
+        stroke-linecap="round"/>
+  <path d="M60 20 L62 27 L69 29 L62 31 L60 38 L58 31 L51 29 L58 27 Z" fill="#f2a938"/>
 </svg>
 """
 
@@ -54,14 +45,15 @@ def logo_svg(width=64):
     return _oneline(_LOGO_SVG).replace("{w}", str(width))
 
 
-def header(subtitle="THE EVIDENCE ECONOMY"):
+def header(subtitle=None):
     """Large logo + wordmark for the landing page."""
+    subtitle = (subtitle or TAGLINE).upper()
     html = (
         '<div style="display:flex;align-items:center;gap:16px;margin:4px 0 8px;">'
         + logo_svg(76)
         + '<div style="line-height:1.15;">'
         + '<div style="font-size:30px;font-weight:800;letter-spacing:.5px;">VENTURE FOUNDRY</div>'
-        + f'<div style="font-size:13px;letter-spacing:3px;opacity:.65;">{subtitle}</div>'
+        + f'<div style="font-size:13px;letter-spacing:2.5px;opacity:.65;">{subtitle}</div>'
         + '</div></div>'
     )
     st.markdown(html, unsafe_allow_html=True)
@@ -74,7 +66,7 @@ def sidebar_logo(caption=""):
         + logo_svg(38)
         + '<div style="line-height:1.1;">'
         + '<div style="font-size:15px;font-weight:800;letter-spacing:.4px;">VENTURE FOUNDRY</div>'
-        + '<div style="font-size:10px;letter-spacing:2px;opacity:.6;">EVIDENCE ECONOMY</div>'
+        + f'<div style="font-size:9px;letter-spacing:1.5px;opacity:.6;">{TAGLINE.upper()}</div>'
         + '</div></div>'
     )
     st.markdown(html, unsafe_allow_html=True)

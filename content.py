@@ -1,5 +1,5 @@
 """
-content.py — Game content for Venture Foundry: The Evidence Economy.
+content.py — Game content for Venture Foundry: From hunch to hard evidence.
 
 All the printed "cards," ladders, and lookup tables from the simulation design
 live here so instructors can tune the game without touching application logic.

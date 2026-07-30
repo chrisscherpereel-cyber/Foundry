@@ -1,5 +1,5 @@
 """
-db.py — SQLite persistence layer for Venture Foundry: The Evidence Economy.
+db.py — SQLite persistence layer for Venture Foundry: From hunch to hard evidence.
 
 A single-file database keeps the whole cohort's state so progress survives
 restarts and multiple teams can play in parallel. All access goes through the

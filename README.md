@@ -1,4 +1,4 @@
-# Venture Foundry — The Evidence Economy
+# Venture Foundry — From hunch to hard evidence
 
 A semester-long entrepreneurship simulation as a multi-team Streamlit app with
 SQLite persistence. Student teams create, test, revise, finance, and defend a
