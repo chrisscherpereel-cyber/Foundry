@@ -588,6 +588,7 @@ _CANVAS_DEFS = {
     "customer_profile": ("Customer Profile", content.CUSTOMER_PROFILE_BLOCKS),
     "vpc": ("Value Proposition Canvas", content.VPC_BLOCKS),
     "bmc": ("Business Model Canvas", content.BMC_BLOCKS),
+    "environment": ("Business Model Environment Canvas", content.ENVIRONMENT_BLOCKS),
 }
 
 _CANVAS_HELP = {
@@ -600,7 +601,58 @@ _CANVAS_HELP = {
     "bmc": "The Business Model Canvas describes the whole business on nine blocks — who you "
            "serve, what you offer, how you reach and keep them, how you make money, and what "
            "it costs. The nine blocks depend on each other, so a change in one affects others.",
+    "environment": "The Business Model Environment Canvas scans the world around your model: "
+                   "customer, technology and mega trends, market/industry/macro forces, and the "
+                   "disruptive competitive forces at the centre. Use it to spot threats and "
+                   "opportunities before they hit.",
 }
+
+
+# Decorative schematic drawn above each canvas so it resembles the printed original.
+def _canvas_diagram(ctype):
+    svgs = {
+        "customer_profile":
+            "<svg viewBox='0 0 200 130' width='190' height='124' xmlns='http://www.w3.org/2000/svg'>"
+            "<circle cx='100' cy='65' r='58' fill='#f4f7fc' stroke='#33415c' stroke-width='2'/>"
+            "<line x1='100' y1='65' x2='158' y2='65' stroke='#33415c' stroke-width='1.5'/>"
+            "<line x1='100' y1='65' x2='58' y2='20' stroke='#33415c' stroke-width='1.5'/>"
+            "<line x1='100' y1='65' x2='58' y2='110' stroke='#33415c' stroke-width='1.5'/>"
+            "<circle cx='100' cy='65' r='12' fill='#fff' stroke='#33415c' stroke-width='1.5'/>"
+            "<text x='128' y='58' font-size='9' fill='#33415c'>Jobs</text>"
+            "<text x='60' y='34' font-size='9' fill='#2b9d8f'>Gains</text>"
+            "<text x='60' y='100' font-size='9' fill='#c0562b'>Pains</text></svg>",
+        "vpc":
+            "<svg viewBox='0 0 240 130' width='210' height='114' xmlns='http://www.w3.org/2000/svg'>"
+            "<rect x='8' y='18' width='94' height='94' fill='#f4f7fc' stroke='#33415c' stroke-width='2'/>"
+            "<line x1='55' y1='18' x2='55' y2='112' stroke='#33415c' stroke-width='1'/>"
+            "<circle cx='170' cy='65' r='47' fill='#f4f7fc' stroke='#33415c' stroke-width='2'/>"
+            "<line x1='170' y1='65' x2='217' y2='65' stroke='#33415c' stroke-width='1'/>"
+            "<line x1='170' y1='65' x2='137' y2='30' stroke='#33415c' stroke-width='1'/>"
+            "<line x1='170' y1='65' x2='137' y2='100' stroke='#33415c' stroke-width='1'/>"
+            "<text x='20' y='14' font-size='9' fill='#33415c'>Value Map</text>"
+            "<text x='150' y='14' font-size='9' fill='#33415c'>Customer</text></svg>",
+        "bmc":
+            "<svg viewBox='0 0 300 120' width='250' height='100' xmlns='http://www.w3.org/2000/svg'>"
+            "<g fill='#f4f7fc' stroke='#33415c' stroke-width='1.5'>"
+            "<rect x='4' y='8' width='55' height='78'/><rect x='61' y='8' width='55' height='38'/>"
+            "<rect x='61' y='48' width='55' height='38'/><rect x='118' y='8' width='55' height='78'/>"
+            "<rect x='175' y='8' width='55' height='38'/><rect x='175' y='48' width='55' height='38'/>"
+            "<rect x='232' y='8' width='55' height='78'/>"
+            "<rect x='4' y='88' width='140' height='26'/><rect x='146' y='88' width='141' height='26'/>"
+            "</g></svg>",
+        "environment":
+            "<svg viewBox='0 0 200 150' width='190' height='142' xmlns='http://www.w3.org/2000/svg'>"
+            "<circle cx='100' cy='75' r='66' fill='none' stroke='#9fb3d1' stroke-width='1' stroke-dasharray='3 3'/>"
+            "<circle cx='100' cy='75' r='40' fill='#eef3fb' stroke='#33415c' stroke-width='1.5'/>"
+            "<rect x='84' y='60' width='32' height='30' fill='#fff' stroke='#33415c' stroke-width='1'/>"
+            "<g fill='#2b6cb0'>"
+            "<circle cx='100' cy='9' r='6'/><circle cx='100' cy='141' r='6'/>"
+            "<circle cx='34' cy='40' r='6'/><circle cx='166' cy='40' r='6'/>"
+            "<circle cx='34' cy='110' r='6'/><circle cx='166' cy='110' r='6'/></g></svg>",
+    }
+    svg = svgs.get(ctype)
+    if svg:
+        st.markdown(svg, unsafe_allow_html=True)
 
 
 def _cbox(parent, title, key, prefill, height=120, hint=""):
@@ -619,17 +671,47 @@ def _cbox(parent, title, key, prefill, height=120, hint=""):
 
 
 def _customer_profile_layout(ctype, val):
-    """Strategyzer Customer Profile (the circle): Gains, Jobs, Pains."""
-    st.caption("The customer 'circle' — describe the segment from the outside in. "
-               "Gains (wanted outcomes) · Jobs (what they're trying to get done) · Pains (bad outcomes).")
+    """Strategyzer Customer Profile (the circle): Gains top-left, Jobs right, Pains bottom-left."""
+    st.caption("The customer 'circle' — Gains at the top-left, Customer Jobs on the right, "
+               "Pains at the bottom-left, just like the Strategyzer profile.")
     data = {}
-    data["gains"] = _cbox(st, "😀 Gains (top of circle)", f"{ctype}_gains", val("gains"),
-                          110, "Benefits and positive outcomes the customer wants.")
-    data["customer_jobs"] = _cbox(st, "🎯 Customer Jobs (centre)", f"{ctype}_customer_jobs",
-                                  val("customer_jobs"), 110,
+    left, right = st.columns([1, 1])
+    data["gains"] = _cbox(left, "🙂 Gains", f"{ctype}_gains", val("gains"),
+                          130, "Benefits and positive outcomes the customer wants.")
+    data["pains"] = _cbox(left, "🙁 Pains", f"{ctype}_pains", val("pains"),
+                          130, "Frustrations, risks, and obstacles they experience.")
+    data["customer_jobs"] = _cbox(right, "☑ Customer Job(s)", f"{ctype}_customer_jobs",
+                                  val("customer_jobs"), 292,
                                   "Functional, social, and emotional jobs they're trying to get done.")
-    data["pains"] = _cbox(st, "😣 Pains (bottom of circle)", f"{ctype}_pains", val("pains"),
-                          110, "Frustrations, risks, and obstacles they experience.")
+    return data
+
+
+def _environment_layout(ctype, val):
+    """Business Model Environment Canvas — trends (top) and forces (bottom) around the model."""
+    st.caption("Scan the environment around your model. TRENDS (what's emerging) across the top; "
+               "FORCES (what's acting on you now) across the bottom; the disruptive competitive "
+               "forces sit at the centre.")
+    data = {}
+    st.markdown("**⬆ Emerging trends**")
+    t = st.columns(3)
+    data["customer_trends"] = _cbox(t[0], "👥 Customer Trends", f"{ctype}_customer_trends",
+                                    val("customer_trends"), 130, content.ENVIRONMENT_BLOCKS[0][2])
+    data["technology_trends"] = _cbox(t[1], "💻 Technology Trends", f"{ctype}_technology_trends",
+                                      val("technology_trends"), 130, content.ENVIRONMENT_BLOCKS[1][2])
+    data["mega_trends"] = _cbox(t[2], "🌍 Dynamic Mega Trends", f"{ctype}_mega_trends",
+                                val("mega_trends"), 130, content.ENVIRONMENT_BLOCKS[2][2])
+    st.markdown("**◎ Disruptive / competitive forces (centre)**")
+    data["disruptive_forces"] = _cbox(st, "⚔ Disruptive / Competitive Forces",
+                                      f"{ctype}_disruptive_forces", val("disruptive_forces"),
+                                      110, content.ENVIRONMENT_BLOCKS[6][2])
+    st.markdown("**⬇ Forces acting now**")
+    f = st.columns(3)
+    data["market_forces"] = _cbox(f[0], "📈 Market Forces", f"{ctype}_market_forces",
+                                  val("market_forces"), 130, content.ENVIRONMENT_BLOCKS[4][2])
+    data["industry_forces"] = _cbox(f[1], "🏭 Industry Forces", f"{ctype}_industry_forces",
+                                    val("industry_forces"), 130, content.ENVIRONMENT_BLOCKS[5][2])
+    data["macro_forces"] = _cbox(f[2], "💱 Macro-Economic Forces", f"{ctype}_macro_forces",
+                                 val("macro_forces"), 130, content.ENVIRONMENT_BLOCKS[3][2])
     return data
 
 
@@ -695,16 +777,16 @@ def canvases(team):
     st.subheader("🗂️ Canvases")
     editable = _round_gate("Canvases", team)
     cur = db.current_round()
-    cp_wk = logic.canvas_unlock_round("customer_profile")
-    vpc_wk = logic.canvas_unlock_round("vpc")
-    bmc_wk = logic.canvas_unlock_round("bmc")
     _guide(
         "These are the real Strategyzer canvases, laid out as they appear on paper. Treat every "
         "box as a **hypothesis** you'll later test, not a fact. Each time you learn something, "
         "save a NEW version with a note on what changed — the simulation grades how your "
-        "thinking evolves. The three canvases are staged so no single round is overloaded: "
-        f"Customer Profile from Round {cp_wk}, the Value Proposition Canvas from Round {vpc_wk}, "
-        f"and the Business Model Canvas from Round {bmc_wk}.",
+        "thinking evolves. Each canvas is staged to its own round: "
+        f"Customer Profile (R{logic.canvas_unlock_round('customer_profile')}), "
+        f"Value Proposition Canvas (R{logic.canvas_unlock_round('vpc')}), "
+        f"Business Model Canvas (R{logic.canvas_unlock_round('bmc')}), "
+        f"Environment Canvas (R{logic.canvas_unlock_round('environment')}). "
+        "Under Strict round mode you can only EDIT the canvas that belongs to the current round.",
         steps=[
             "Work on the canvas that's in focus this round (shown below).",
             "Fill the boxes in their canonical positions. Empty is fine early on.",
@@ -715,7 +797,7 @@ def canvases(team):
             ("Customer Profile", "The circle: jobs, pains, and gains of one segment."),
             ("Value Proposition Canvas", "Value map (square) + customer profile (circle) — the 'fit'."),
             ("Business Model Canvas", "The nine blocks of the whole business."),
-            ("Version", "A dated snapshot. Saving again makes v2, v3… so learning is visible."),
+            ("Environment Canvas", "The trends and forces surrounding the model (UNITE scan)."),
         ],
     )
     _ai_check_notice()
@@ -730,15 +812,25 @@ def canvases(team):
     ctype = st.selectbox(
         "Canvas type", canvas_keys, index=default_idx,
         format_func=lambda k: _CANVAS_DEFS[k][0],
-        help="Customer Profile → Value Proposition Canvas → Business Model Canvas is the "
-             "guided order; each is introduced a few rounds apart.",
+        help="Customer Profile → Value Proposition Canvas → Business Model Canvas → "
+             "Environment Canvas is the guided order; each belongs to its own round.",
     )
     title, blocks = _CANVAS_DEFS[ctype]
+
+    # Per-canvas editability: under strict mode a canvas is editable only in its round.
+    canvas_ok = logic.canvas_editable(ctype, cur, team["id"]) and editable
     unlock = logic.canvas_unlock_round(ctype)
     if cur < unlock:
-        st.warning(f"🔒 The {title} is introduced in **Round {unlock}**. You can sketch it "
-                   "early, but its concepts are taught then.")
-    st.caption(_CANVAS_HELP[ctype])
+        st.warning(f"🔒 The {title} is introduced in **Round {unlock}**. It's view-only until then.")
+    elif not canvas_ok and editable:
+        st.info(f"👁️ The {title} belongs to a different round, so it's view-only now "
+                f"(its round is R{unlock}). Your saved versions are shown below.")
+
+    c1, c2 = st.columns([1, 3])
+    with c1:
+        _canvas_diagram(ctype)
+    with c2:
+        st.caption(_CANVAS_HELP[ctype])
 
     existing = db.list_canvases(team["id"], ctype)
     latest = existing[-1] if existing else None
@@ -755,6 +847,8 @@ def canvases(team):
             data = _customer_profile_layout(ctype, val)
         elif ctype == "vpc":
             data = _vpc_layout(ctype, val)
+        elif ctype == "environment":
+            data = _environment_layout(ctype, val)
         else:
             data = _bmc_layout(ctype, val)
 
@@ -766,7 +860,7 @@ def canvases(team):
             "What changed / why (evidence-driven?)",
             help="One line on what you changed and what evidence prompted it. This is graded — "
                  "it shows your thinking evolved for a reason.")
-        if st.form_submit_button(f"Save new {title} version", disabled=not editable,
+        if st.form_submit_button(f"Save new {title} version", disabled=not canvas_ok,
                                  help="Store the current boxes as a new dated version."):
             v = db.save_canvas(team["id"], ctype, data, vlabel, note)
             st.success(f"Saved {title} version {v}.")

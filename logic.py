@@ -199,7 +199,8 @@ def canvas_unlock_round(canvas_type):
     """Earliest round whose material focuses on a given canvas type."""
     for row in get_schedule():
         for topic in row["topics"]:
-            if topic.get("canvas") == canvas_type:
+            cs = topic.get("canvases") or ([topic["canvas"]] if topic.get("canvas") else [])
+            if canvas_type in cs:
                 return row["round"]
     return 1
 
@@ -208,9 +209,10 @@ def canvas_focus_for_round(rnd):
     """List of canvas types in focus this round (a round may cover several)."""
     focuses = []
     for topic in topics_for_round(rnd):
-        c = topic.get("canvas")
-        if c and c not in focuses:
-            focuses.append(c)
+        cs = topic.get("canvases") or ([topic["canvas"]] if topic.get("canvas") else [])
+        for c in cs:
+            if c and c not in focuses:
+                focuses.append(c)
     return focuses
 
 
@@ -236,6 +238,8 @@ def _deliverable_done(team_id, check, rnd):
         return len(db.list_canvases(team_id, "bmc")) >= 2
     if check == "bmc_ge_3":
         return len(db.list_canvases(team_id, "bmc")) >= 3
+    if check == "env_ge_1":
+        return len(db.list_canvases(team_id, "environment")) >= 1
     if check == "evidence_ge_2":
         return len(db.list_evidence(team_id)) >= 2
     if check == "evidence_ge_4":
@@ -378,6 +382,40 @@ def tool_editable(page, rnd, team_id=None):
     if state == "reference":
         return not strict_round_mode()
     return True
+
+
+# ---- Per-canvas gating: a canvas is editable only in its own round --------- #
+_CHECK_CANVAS = {
+    "cp_ge_1": "customer_profile", "cp_ge_2": "customer_profile",
+    "vpc_ge_1": "vpc",
+    "bmc_ge_1": "bmc", "bmc_ge_2": "bmc", "bmc_ge_3": "bmc",
+    "env_ge_1": "environment",
+}
+
+
+def editable_canvas_types(team_id, rnd):
+    """Canvas types the team may edit this round: this round's focus canvases plus
+    any canvas whose deliverable is still carried over from an earlier round."""
+    types = set(canvas_focus_for_round(rnd))
+    if team_id is not None:
+        for d in outstanding_prior(team_id, rnd):
+            c = _CHECK_CANVAS.get(d.get("check"))
+            if c:
+                types.add(c)
+    return types
+
+
+def canvas_unlock_round_for(ctype):
+    return canvas_unlock_round(ctype)
+
+
+def canvas_editable(ctype, rnd, team_id=None):
+    """Whether a specific canvas type can be edited this round."""
+    if not tool_editable("Canvases", rnd, team_id):
+        return False
+    if not strict_round_mode():
+        return True
+    return ctype in editable_canvas_types(team_id, rnd)
 
 
 # ---- Founder / team skills ------------------------------------------------- #

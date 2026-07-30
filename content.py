@@ -248,6 +248,25 @@ BMC_BLOCKS = [
     ("cost_structure", "Cost Structure", "What are the dominant costs?"),
 ]
 
+# Business Model Environment Canvas (the UNITE / Strategyzer environment scan):
+# the trends and forces that shape and disrupt the business model.
+ENVIRONMENT_BLOCKS = [
+    ("customer_trends", "Customer Trends", "Individualization, new experiences, behavioral "
+     "shifts, refocus on purpose, digitalization of everything"),
+    ("technology_trends", "Technology Trends", "AI, AR/VR, blockchain, IoT, automation & "
+     "robotics, cloud, sensors, data rights & privacy"),
+    ("mega_trends", "Dynamic Mega Trends", "Sustainability, next-gen workforce, wealth "
+     "distribution, (de-)urbanization, climate change, cyber risk"),
+    ("macro_forces", "Macro-Economic Forces", "Global market & trade, regulation, demographics, "
+     "economic cycle, political forces, currency & price volatility"),
+    ("market_forces", "Market Forces", "Supply & demand, market issues, switching costs, "
+     "revenue attractiveness, globalization/deglobalization"),
+    ("industry_forces", "Industry Forces", "Stakeholders & partners, suppliers, competitors "
+     "(incumbents), new entrants, substitute products/services"),
+    ("disruptive_forces", "Disruptive / Competitive Forces", "The five forces at the centre: "
+     "new competitors, suppliers, customers, substitutes, and industry rivalry"),
+]
+
 # --------------------------------------------------------------------------- #
 # Assumption risk types (Strategyzer testing lens)
 # --------------------------------------------------------------------------- #
@@ -570,13 +589,15 @@ CURRICULUM_TOPICS = [
     {
         "key": "scaling",
         "title": "Scaling and competition",
-        "concepts": ["Channels & partners", "Key resources/activities", "Defensibility"],
+        "concepts": ["Channels & partners", "Key resources/activities", "Defensibility",
+                     "Environment scanning (trends & forces)"],
         "objectives": ["Respond to competitor moves and capacity limits.",
-                        "Strengthen channels, resources, activities, and partners.",
+                        "Scan the environment — trends and disruptive forces around the model.",
                         "Articulate why the model is defensible."],
-        "class_focus": "Scaling the model and defending it against competition.",
-        "sim_task": "Update the BMC into a scaling plan; handle competitive events.",
+        "class_focus": "Scaling and defending the model; scanning the business-model environment.",
+        "sim_task": "Update the BMC into a scaling plan and complete the Environment Canvas.",
         "tool": "Canvases", "introduces": [], "canvas": "bmc",
+        "canvases": ["bmc", "environment"],
     },
     {
         "key": "investment_readiness",
@@ -605,7 +626,7 @@ CURRICULUM_TOPICS = [
 CURRICULUM_BY_KEY = {t["key"]: t for t in CURRICULUM_TOPICS}
 DEFAULT_TOPIC_ORDER = [t["key"] for t in CURRICULUM_TOPICS]
 DEFAULT_TOTAL_ROUNDS = len(CURRICULUM_TOPICS)
-CANVAS_TYPES = ["customer_profile", "vpc", "bmc"]
+CANVAS_TYPES = ["customer_profile", "vpc", "bmc", "environment"]
 
 # --------------------------------------------------------------------------- #
 # Round deliverables — the concrete things a team must complete to finish a round.
@@ -673,6 +694,8 @@ TOPIC_DELIVERABLES = {
     "scaling": [
         {"label": "Update the BMC into a scaling plan (new version)",
          "check": "bmc_ge_3", "tool": "Canvases", "must_update": True},
+        {"label": "Complete the Business Model Environment Canvas (trends & forces)",
+         "check": "env_ge_1", "tool": "Canvases", "must_update": True},
     ],
     "investment_readiness": [
         {"label": "Draft your investment memo (as this round's reflection)",
@@ -842,6 +865,11 @@ CONCEPT_LIBRARY = {
     "Defensibility":
         ("Why a competitor can't easily copy or undercut you.",
          "What makes your position hard to copy?"),
+    "Environment scanning (trends & forces)":
+        ("Your model lives in an environment of customer/technology/mega trends and of market, "
+         "industry, macro-economic and competitive forces. Scanning them reveals threats and "
+         "opportunities before they hit.",
+         "Which trend or force could most disrupt your model in the next two years?"),
     "Evidence narrative":
         ("A clear story of what you know, how you know it, and what's still assumption.",
          "In three sentences, what do you know and how do you know it?"),
