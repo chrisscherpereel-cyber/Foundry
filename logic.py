@@ -529,24 +529,31 @@ def untrain_skill(team_id, skill_key):
 
 # ---- Hiring ---------------------------------------------------------------- #
 def hire_specialist(team_id, skill_key, kind):
-    """Hire a part-time or full-time specialist for a skill. Charges the upfront
-    cost now; the per-round salary is charged when the round advances."""
+    """Hire a specialist. Costs money (upfront) AND founder time (recruiting), and
+    adds an ongoing salary (money) plus management time (hours) each round."""
     opt = hire_options().get(kind)
     if not opt:
         return False, "Unknown employment type."
     role = content.SPECIALIST_ROLES.get(skill_key, "Specialist")
+    recruit = content.HIRE_OPTIONS[kind].get("recruit_hours", 0)
+    manage = content.HIRE_OPTIONS[kind].get("manage_hours", 0)
     ok, msg = db.adjust_resources(
-        team_id, money=-opt["upfront"], kind="hire",
+        team_id, money=-opt["upfront"], hours=-recruit, kind="hire",
         description=f"Hired {opt['label']} {role}")
     if not ok:
-        return False, msg
-    db.add_hire(team_id, skill_key, role, kind, opt["boost"], opt["per_round"])
-    extra = f" · salary ${opt['per_round']}/round" if opt["per_round"] else ""
-    return True, f"Hired a {opt['label'].lower()} {role} (+{opt['boost']} {role} skill){extra}."
+        return False, f"{msg} (hiring needs ${opt['upfront']:.0f} and {recruit}h to recruit.)"
+    db.add_hire(team_id, skill_key, role, kind, opt["boost"], opt["per_round"], manage)
+    return True, (f"Hired a {opt['label'].lower()} {role} (+{opt['boost']} {role}). "
+                  f"Ongoing: ${opt['per_round']:.0f}/round and {manage}h/round to manage.")
 
 
 def fire_specialist(hire_id):
     db.remove_hire(hire_id)
+
+
+def management_hours(team_id):
+    """Founder hours per round consumed managing current hires."""
+    return sum((h.get("manage_hours") or 0) for h in db.list_hires(team_id))
 
 
 def skills_needed_this_round(rnd):
@@ -559,10 +566,70 @@ def skills_needed_this_round(rnd):
     return needs
 
 
-# ---- Per-round time & salary ----------------------------------------------- #
+# ---- Hours model: weekly budget, reset each round, diminishing returns ------ #
+def productive_hours(raw):
+    """Effective founder-hours from a raw weekly figure. Hours up to 40 are fully
+    productive; each hour beyond 40 (to a max of 80) counts for less."""
+    raw = max(0, min(content.MAX_WEEKLY_HOURS, raw or 0))
+    if raw <= content.FULL_PRODUCTIVITY_HOURS:
+        return int(round(raw))
+    over = raw - content.FULL_PRODUCTIVITY_HOURS
+    return int(round(content.FULL_PRODUCTIVITY_HOURS + over * content.OVERWORK_PRODUCTIVITY))
+
+
+def weekly_hours(team):
+    """A team's raw weekly hours (Director default overrides the stored value)."""
+    override = db.get_setting("econ_hours_per_week")
+    if override not in (None, ""):
+        try:
+            return float(override)
+        except (TypeError, ValueError):
+            pass
+    return team.get("hours_per_round") or content.DEFAULT_HOURS_PER_WEEK
+
+
+def round_hours_budget(team):
+    """Effective founder-hours available for a round after management overhead."""
+    eff = productive_hours(weekly_hours(team))
+    return max(0, eff - management_hours(team["id"]))
+
+
+# ---- Founder learning-by-doing --------------------------------------------- #
+def add_skill_xp(team_id, skill_key, n):
+    """Add learning XP to a skill; level up when it crosses the threshold."""
+    xp = db.get_skill_xp(team_id, skill_key) + n
+    lvl = db.get_team_skills(team_id).get(skill_key, 0)
+    leveled = 0
+    while xp >= content.LEARNING_XP_PER_LEVEL and lvl < content.SKILL_MAX:
+        xp -= content.LEARNING_XP_PER_LEVEL
+        lvl += 1
+        leveled += 1
+    db.set_skill_level(team_id, skill_key, lvl)
+    db.set_skill_xp(team_id, skill_key, xp)
+    return leveled
+
+
+def round_own_complete(team_id, rnd):
+    """Whether a team finished THAT round's own decisions and concept checks
+    (ignoring backlog carried from earlier rounds)."""
+    items = round_progress(team_id, rnd) + concept_progress(team_id, rnd)
+    return all(i["done"] for i in items) if items else False
+
+
+def _apply_round_learning(team_id, completed_round):
+    """Founder learns by running the business: doing a round's own work grows the
+    founder skills that round leaned on (learning tied to the team's progress)."""
+    if not round_own_complete(team_id, completed_round):
+        return
+    for k in skills_needed_this_round(completed_round):
+        add_skill_xp(team_id, k, 1)
+
+
+# ---- Per-round reset, salary, and learning --------------------------------- #
 def on_round_change(new_round):
-    """Grant each team its per-round founder-hours for every round newly reached,
-    and charge full-/part-time salaries once per new round. Idempotent via a marker."""
+    """When the round advances: apply learning for each completed round, RESET each
+    team's founder-hours to this week's budget (no carryover — unused hours are
+    lost), and charge specialist salaries. Idempotent via a marker."""
     try:
         marker = int(db.get_setting("hours_marker", "1"))
     except (TypeError, ValueError):
@@ -571,12 +638,12 @@ def on_round_change(new_round):
         return
     rounds_passed = new_round - marker
     for t in db.list_teams():
-        hpr = t.get("hours_per_round") or content.DEFAULT_HOURS_PER_ROUND
-        # grant time for each new round
-        db.adjust_resources(t["id"], hours=hpr * rounds_passed, kind="hours",
-                            description=f"Founder time for {rounds_passed} round(s)",
-                            allow_negative=True)
-        # charge salaries for each new round
+        # learning from each round that just finished
+        for r in range(marker, new_round):
+            _apply_round_learning(t["id"], r)
+        # reset available hours to this week's budget (no accumulation)
+        db.update_team(t["id"], founder_hours=round_hours_budget(t))
+        # charge salaries for each round passed
         salary = sum((h["per_round"] or 0) for h in db.list_hires(t["id"]))
         if salary:
             db.adjust_resources(t["id"], money=-salary * rounds_passed, kind="salary",
@@ -796,8 +863,11 @@ def quick_setup_teams(n_teams, difficulty, opportunity_mode="distinct",
             name, territory, base_card,
             capital=preset["capital"], evidence_credits=preset["credits"],
             founder_hours=preset["hours"], market_potential=preset["market_potential"],
-            hours_per_round=preset["hours"],
+            hours_per_round=preset["hours"],   # raw weekly hours
         )
+        # start with this week's effective (productive) hours available
+        db.update_team(db.get_team_by_code(code)["id"],
+                       founder_hours=productive_hours(preset["hours"]))
         created.append({"name": name, "code": code, "territory": territory})
     return created
 

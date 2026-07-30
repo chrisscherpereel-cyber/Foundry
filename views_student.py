@@ -340,31 +340,38 @@ def concept_check(team):
 def founder_skills(team):
     st.subheader("🛠️ Founder & Team")
     _guide(
-        "Your founders can't be great at everything. Each round the founder has a limited amount "
-        "of time to split between BUILDING the business (experiments, canvases) and TRAINING "
-        "skills — and time refills a bit each round because the founder keeps working. When a "
-        "skill the venture needs is weak, you can HIRE a specialist part-time or full-time to "
-        "fill the gap (for money instead of the founder's time). Your EFFECTIVE skill = founder "
-        "level + any hires.",
+        "Your founders can't be great at everything. Each round the founder has a fixed amount "
+        "of time — a long work week — to split between RUNNING the business (experiments, "
+        "canvases), TRAINING skills, and MANAGING any hires. Founders work up to 80 hours, but "
+        "productivity drops past 40, and unused time is LOST — it does not carry over. When a "
+        "skill the venture needs is weak, HIRE a specialist (costs money, recruiting time, and "
+        "ongoing salary + management time). And founders keep LEARNING BY DOING: finishing a "
+        "round's work grows the skills that round leaned on.",
         terms=[
-            ("Founder-time per round", "Hours the founder gains each round to build or train."),
+            ("Weekly hours", "Founder time this round; resets each round (no carryover)."),
+            ("Productivity", "Hours up to 40 are full value; each hour past 40 counts for less."),
             ("Training", "Spend founder-hours to raise a skill; you can undo it for a refund."),
-            ("Hiring", "Pay a specialist (upfront + salary) to raise a skill you lack."),
+            ("Hiring", "Money + recruiting time upfront; salary + management time each round."),
+            ("Learning by doing", "Completing rounds grows the skills that round used."),
             ("Effective skill", "Founder level + hired boost — what actually counts (cap 5)."),
         ],
     )
     team = _refresh_team(team["id"])
     cur = db.current_round()
-    hpr = team.get("hours_per_round") or content.DEFAULT_HOURS_PER_ROUND
+    raw = logic.weekly_hours(team)
+    eff = logic.productive_hours(raw)
+    mgmt = logic.management_hours(team["id"])
     m1, m2, m3 = st.columns(3)
-    m1.metric("Founder-hours available", f"{team['founder_hours']:.0f}",
-              help="Spent on experiments (building) AND training. Refills ~"
-                   f"{hpr:.0f}/round.")
-    m2.metric("Time per round", f"+{hpr:.0f} hrs",
-              help="Added at the start of each new round — the founder keeps working.")
+    m1.metric("Hours available now", f"{team['founder_hours']:.0f}",
+              help="Spend on experiments (building), training, or hiring. Resets each round; "
+                   "unused hours are lost.")
+    m2.metric("Weekly budget", f"{raw:.0f} raw → {eff} productive",
+              help="Founders work long weeks (max 80h) but productivity drops past 40h.")
+    m3.metric("Management time", f"-{mgmt:.0f} hrs/round",
+              help="Managing your hires each round leaves less time to build or train.")
     salary = sum((h["per_round"] or 0) for h in db.list_hires(team["id"]))
-    m3.metric("Specialist salaries", f"${salary:,.0f}/round",
-              help="Ongoing cost of your hires, charged from capital each round.")
+    if salary:
+        st.caption(f"💸 Specialist salaries: **${salary:,.0f}/round** (charged from capital).")
 
     skills = db.get_team_skills(team["id"])
     boosts = logic.hire_boost(team["id"])
@@ -376,6 +383,8 @@ def founder_skills(team):
                 "consider training or hiring.")
 
     st.write("### Your team's skills")
+    st.caption("Founders learn by doing — completing each round's work grows the skills that "
+               "round used, on top of any training or hiring.")
     for s in content.FOUNDER_SKILLS:
         base = skills.get(s["key"], 0)
         boost = boosts.get(s["key"], 0)
@@ -439,11 +448,12 @@ def founder_skills(team):
             help="Pick the skill you want to raise by hiring.")
         kind = hc2.selectbox(
             "Employment", list(hire_opts.keys()),
-            format_func=lambda k: (f"{hire_opts[k]['label']} · +{hire_opts[k]['boost']} skill · "
-                                   f"${hire_opts[k]['upfront']:.0f} upfront"
-                                   + (f" + ${hire_opts[k]['per_round']:.0f}/round"
-                                      if hire_opts[k]['per_round'] else "")),
-            help="Part-time is cheaper with a smaller boost; full-time boosts more but adds a salary.")
+            format_func=lambda k: (
+                f"{hire_opts[k]['label']} · +{hire_opts[k]['boost']} skill · "
+                f"${hire_opts[k]['upfront']:.0f} + {content.HIRE_OPTIONS[k]['recruit_hours']}h to recruit · "
+                f"then ${hire_opts[k]['per_round']:.0f} + {content.HIRE_OPTIONS[k]['manage_hours']}h/round"),
+            help="Part-time is cheaper with a smaller boost; full-time boosts more but costs more "
+                 "money and management time.")
         if st.form_submit_button("Hire specialist"):
             ok, msg = logic.hire_specialist(team["id"], skill_key, kind)
             (st.success if ok else st.error)(msg)
@@ -586,8 +596,8 @@ def founder_opportunity(team):
                 ("🛠 Skills", card.get("skills", "—"), "skills"),
                 ("🔗 Networks", card.get("networks", "—"), "networks"),
                 ("💵 Budget you can afford to lose", f"${card.get('budget','—')}", "budget"),
-                ("⏳ Founder-time per round", f"{team.get('hours_per_round', card.get('hours','—')):.0f} hours",
-                 "hours"),
+                ("⏳ Founder-time per week", f"{logic.weekly_hours(team):.0f} hrs "
+                 f"(≈{logic.productive_hours(logic.weekly_hours(team))} productive)", "hours"),
                 ("🎲 Risk tolerance", card.get("risk", "—"), "risk"),
                 ("⚖️ Ethical boundary", card.get("ethics", "—"), "ethics"),
             ]

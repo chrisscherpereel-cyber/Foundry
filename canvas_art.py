@@ -137,9 +137,6 @@ _BMC = (
     + _bmc_block(738, 10, 172, 372, "#c98a2b", "Customer Segments")
     + _bmc_block(10, 392, 442, 118, "#3f4a63", "Cost Structure")
     + _bmc_block(462, 392, 448, 118, TEAL, "Revenue Streams")
-    # simple glyphs
-    + f'<circle cx="452" cy="196" r="30" fill="none" stroke="{TEAL}" stroke-width="3"/>'
-    + f'<path d="M452 180 L452 212 M436 196 L468 196" stroke="{TEAL}" stroke-width="3"/>'
     + '</svg>'
 )
 

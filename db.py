@@ -293,7 +293,16 @@ CREATE TABLE IF NOT EXISTS hires (
     kind       TEXT,          -- part_time | full_time
     boost      INTEGER DEFAULT 0,
     per_round  REAL DEFAULT 0,
+    manage_hours REAL DEFAULT 0,
     created_at TEXT,
+    FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS skill_xp (
+    team_id   INTEGER NOT NULL,
+    skill_key TEXT NOT NULL,
+    xp        INTEGER DEFAULT 0,
+    PRIMARY KEY (team_id, skill_key),
     FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
 );
 """
@@ -309,7 +318,8 @@ def init_db():
     conn = get_conn()
     try:
         conn.executescript(SCHEMA)
-        _ensure_column(conn, "teams", "hours_per_round", "REAL DEFAULT 40")
+        _ensure_column(conn, "teams", "hours_per_round", "REAL DEFAULT 60")
+        _ensure_column(conn, "hires", "manage_hours", "REAL DEFAULT 0")
         # Seed default settings once.
         cur = conn.execute("SELECT value FROM settings WHERE key='current_round'")
         if cur.fetchone() is None:
@@ -1252,16 +1262,44 @@ def has_ack(team_id, key):
 # --------------------------------------------------------------------------- #
 # Hires — specialists filling skill gaps
 # --------------------------------------------------------------------------- #
-def add_hire(team_id, skill_key, role, kind, boost, per_round):
+def add_hire(team_id, skill_key, role, kind, boost, per_round, manage_hours=0):
     conn = get_conn()
     try:
         cur = conn.execute(
-            """INSERT INTO hires(team_id, skill_key, role, kind, boost, per_round, created_at)
-               VALUES(?,?,?,?,?,?,?)""",
-            (team_id, skill_key, role, kind, boost, per_round, now()),
+            """INSERT INTO hires(team_id, skill_key, role, kind, boost, per_round,
+                                 manage_hours, created_at)
+               VALUES(?,?,?,?,?,?,?,?)""",
+            (team_id, skill_key, role, kind, boost, per_round, manage_hours, now()),
         )
         conn.commit()
         return cur.lastrowid
+    finally:
+        conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# Skill XP (learning by doing)
+# --------------------------------------------------------------------------- #
+def get_skill_xp(team_id, skill_key):
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT xp FROM skill_xp WHERE team_id=? AND skill_key=?", (team_id, skill_key)
+        ).fetchone()
+        return row["xp"] if row else 0
+    finally:
+        conn.close()
+
+
+def set_skill_xp(team_id, skill_key, xp):
+    conn = get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO skill_xp(team_id, skill_key, xp) VALUES(?,?,?) "
+            "ON CONFLICT(team_id, skill_key) DO UPDATE SET xp=excluded.xp",
+            (team_id, skill_key, int(xp)),
+        )
+        conn.commit()
     finally:
         conn.close()
 

@@ -96,35 +96,45 @@ BALANCED_FOUNDER_CARD = {
 
 # --------------------------------------------------------------------------- #
 # Difficulty levels — set the starting resources every team receives.
-# `hours` is now the founder's TIME PER ROUND (not a whole-term pool): each round
-# the founder gets this many hours to split between BUILDING the business
-# (experiments, canvases) and TRAINING skills. Unused hours carry over. Higher
-# difficulty = leaner cash, credits, and time per round, and a lower market ceiling.
-# Every team in a cohort uses the SAME level, which keeps their odds equal.
+# `hours` is the founder's WEEKLY hours (raw, 40–80). Founders work long weeks, but
+# productivity drops past 40 hours, so effective time grows more slowly (see
+# logic.productive_hours). Each round the available time RESETS to this budget —
+# unused hours are lost, they never accumulate. Time is split between running the
+# business (experiments/canvases), training, and managing any hires.
 # --------------------------------------------------------------------------- #
 DIFFICULTY_ORDER = ["Novice", "Easy", "Standard", "Hard", "Expert"]
 DIFFICULTY_LEVELS = {
     "Novice": {
-        "capital": 6000, "credits": 30, "hours": 60, "market_potential": 1_500_000,
-        "blurb": "Very forgiving. Generous cash, credits, and ~60 founder-hours per round.",
+        "capital": 6000, "credits": 30, "hours": 80, "market_potential": 1_500_000,
+        "blurb": "Very forgiving. Generous cash and an 80-hour founder week.",
     },
     "Easy": {
-        "capital": 4500, "credits": 20, "hours": 50, "market_potential": 1_250_000,
-        "blurb": "Comfortable resources with a little pressure. ~50 hours per round.",
+        "capital": 4500, "credits": 20, "hours": 70, "market_potential": 1_250_000,
+        "blurb": "Comfortable resources with a little pressure. ~70-hour week.",
     },
     "Standard": {
-        "capital": 3000, "credits": 12, "hours": 40, "market_potential": 1_000_000,
-        "blurb": "The default balance. ~40 founder-hours per round to build and train.",
+        "capital": 3000, "credits": 12, "hours": 60, "market_potential": 1_000_000,
+        "blurb": "The default balance. A 60-hour founder week to build, train, and manage.",
     },
     "Hard": {
-        "capital": 2000, "credits": 8, "hours": 32, "market_potential": 800_000,
-        "blurb": "Scarce resources. ~32 hours per round — every choice is a trade-off.",
+        "capital": 2000, "credits": 8, "hours": 50, "market_potential": 800_000,
+        "blurb": "Scarce resources. ~50-hour week — every choice is a trade-off.",
     },
     "Expert": {
-        "capital": 1200, "credits": 5, "hours": 24, "market_potential": 600_000,
-        "blurb": "Ruthless scarcity. ~24 hours per round; build or train, rarely both.",
+        "capital": 1200, "credits": 5, "hours": 42, "market_potential": 600_000,
+        "blurb": "Ruthless scarcity. ~42-hour week; build or train, rarely both.",
     },
 }
+
+# Hours model constants.
+FULL_PRODUCTIVITY_HOURS = 40   # hours up to this are fully productive
+OVERWORK_PRODUCTIVITY = 0.5    # each hour beyond 40 counts as this much
+MAX_WEEKLY_HOURS = 80
+DEFAULT_HOURS_PER_WEEK = 60
+
+# Founder learning-by-doing: XP earned per completed round on the round's focus
+# skills; this many XP raises a skill by one level.
+LEARNING_XP_PER_LEVEL = 3
 
 # --------------------------------------------------------------------------- #
 # Founder / team skills — structured capabilities the team holds and can grow.
@@ -202,9 +212,14 @@ SPECIALIST_ROLES = {
     "responsible": "Ethics & Privacy Advisor",
 }
 
+# Hiring costs money AND the founder's time: `recruit_hours` (one-time, to find and
+# onboard) and `manage_hours` (every round, to manage the person). Managing people
+# is real founder time that then can't go to building or training.
 HIRE_OPTIONS = {
-    "part_time": {"label": "Part-time", "boost": 2, "upfront": 150, "per_round": 80},
-    "full_time": {"label": "Full-time", "boost": 3, "upfront": 400, "per_round": 200},
+    "part_time": {"label": "Part-time", "boost": 2, "upfront": 150, "per_round": 80,
+                  "recruit_hours": 5, "manage_hours": 4},
+    "full_time": {"label": "Full-time", "boost": 3, "upfront": 400, "per_round": 200,
+                  "recruit_hours": 10, "manage_hours": 8},
 }
 HIRE_SKILL_CAP = 5   # effective skill (founder + hires) can't exceed this
 
@@ -226,9 +241,6 @@ TOPIC_SKILL_NEEDS = {
     "investment_readiness": ["finance", "sales"],
     "venture_market": ["sales", "responsible"],
 }
-
-# Founder time per round, split between building the business and training.
-DEFAULT_HOURS_PER_ROUND = 40
 
 
 # What each founder-card attribute MEANS and how it shapes play (shown on the "?").

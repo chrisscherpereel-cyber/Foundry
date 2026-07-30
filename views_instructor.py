@@ -445,10 +445,12 @@ def round_control():
 
         st.markdown("**Founder time**")
         e1, e2 = st.columns(2)
-        hpr = e1.number_input(
-            "Founder-hours per round (all teams)", 5, 200, int(db.get_setting("econ_hours_per_round", "40") or 40),
-            help="Time each founder gains per round to split between building and training. "
-                 "Saving updates every team and future rounds.")
+        cur_hpw = int(float(db.get_setting("econ_hours_per_week", "60") or 60))
+        hpw = e1.number_input(
+            "Founder-hours per WEEK (raw, all teams)",
+            content.FULL_PRODUCTIVITY_HOURS, content.MAX_WEEKLY_HOURS, cur_hpw,
+            help="Raw weekly hours (40–80). Resets each round — unused hours are lost. "
+                 "Productivity drops past 40h, so effective time grows slowly.")
         train_mult = e2.number_input(
             "Training cost per level (hours × level)", 1, 60, int(econ["train_mult"]),
             help="Founder-hours to raise a skill = (target level) × this. Higher = training is "
@@ -472,12 +474,12 @@ def round_control():
                 "pt_boost": pt_boost, "pt_upfront": pt_up, "pt_per_round": pt_pr,
                 "ft_boost": ft_boost, "ft_upfront": ft_up, "ft_per_round": ft_pr,
             })
-            db.set_setting("econ_hours_per_round", int(hpr))
+            db.set_setting("econ_hours_per_week", int(hpw))
             for t in db.list_teams():
-                db.update_team(t["id"], hours_per_round=int(hpr))
+                db.update_team(t["id"], hours_per_round=int(hpw))
             st.success("Economy settings saved and applied to all teams.")
 
-        st.caption(f"Difficulty presets (starting per-round hours) still live in content.py: "
+        st.caption("Difficulty presets (starting weekly hours) live in content.py: "
                    + ", ".join(f"{k} {v['hours']}h" for k, v in content.DIFFICULTY_LEVELS.items()))
 
     st.divider()
