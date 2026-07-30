@@ -389,46 +389,57 @@ def founder_skills(team):
     )
     team = _refresh_team(team["id"])
     cur = db.current_round()
-    raw = logic.weekly_hours(team)
-    eff = logic.productive_hours(raw)
+    effort = int(logic.effort_hours(team))
+    eff = logic.productive_hours(effort)
     admin = logic.admin_hours(team)
     mgmt = int(logic.management_hours(team["id"]))
     disc = logic.round_hours_budget(team)
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Weekly hours", f"{raw:.0f} → {eff} productive",
-              help="Founders work long weeks (max 80h) but productivity drops past 40h.")
-    m2.metric("Admin & overhead", f"-{admin} hrs",
-              help="Unavoidable running-the-business time each round (before building/learning).")
-    m3.metric("Managing team", f"-{mgmt} hrs",
-              help="Time spent managing your hires each round.")
+    m1.metric("Hours available now", f"{team['founder_hours']:.0f}",
+              help="Effective hours to spend on building or training this round. Resets each "
+                   "round; unused hours are lost.")
+    m2.metric("This week's effort", f"{effort}h → {eff} eff.",
+              help="Raw hours the founder works this week (max 80). Hours past 40 are half as "
+                   "productive, so effective time grows slowly.")
+    m3.metric("Fixed: admin + managing", f"-{admin + mgmt} hrs",
+              help=f"Admin/overhead {admin}h + managing hires {mgmt}h — off the top each round.")
     m4.metric("Discretionary", f"{disc} hrs",
-              help="What's left to split between building the business and learning/training.")
+              help="Effective hours left to split between building and learning/training.")
     salary = sum((h["per_round"] or 0) for h in db.list_hires(team["id"]))
     if salary:
         st.caption(f"💸 Specialist salaries: **${salary:,.0f}/round** (charged from capital).")
 
-    # ---- Time allocation planner + Pareto chart -----------------------------
+    # ---- Effort + time allocation planner + Pareto chart --------------------
     st.divider()
-    st.write("### ⏱️ Founder time allocation")
-    st.caption("Plan how the founder's week is used. Admin and managing hires are fixed; you "
-               "choose how the DISCRETIONARY hours split between building the business and "
-               "learning/training. Re-allocate any round as you learn.")
+    st.write("### ⏱️ Founder effort & time allocation")
+    st.caption("Choose how hard the founder works this week (up to 80 hours — but hours past 40 "
+               "are half as productive). Admin and managing hires come off the top; you split the "
+               "rest between building the business and learning/training. Re-allocate any round.")
     a1, a2 = st.columns([2, 3])
     with a1:
+        new_effort = st.slider(
+            "Founder effort this week (raw hours)", content.FULL_PRODUCTIVITY_HOURS,
+            content.MAX_WEEKLY_HOURS, effort, 5,
+            help="40h is fully productive; each hour to 80 counts for half. More effort = more "
+                 "effective hours, but with diminishing returns.")
+        st.caption(f"{new_effort}h raw → **{logic.productive_hours(new_effort)} effective** hours.")
         bpct = st.slider("Building vs. learning (share of discretionary time to building)",
                          0, 100, logic.get_build_pct(team), 5,
                          help="Higher = more time running experiments/customer work; lower = "
                               "more time training and learning.")
-        build_h = int(round(disc * bpct / 100))
-        st.caption(f"→ Building **{build_h} hrs** · Learning **{disc - build_h} hrs** "
-                   f"· Admin {admin} · Managing {mgmt}")
-        if st.button("Save time allocation"):
+        preview_disc = max(0, logic.productive_hours(new_effort)
+                           - int(round(logic.productive_hours(new_effort) * content.ADMIN_OVERHEAD_PCT))
+                           - mgmt)
+        build_h = int(round(preview_disc * bpct / 100))
+        st.caption(f"→ Building **{build_h} hrs** · Learning **{preview_disc - build_h} hrs**")
+        if st.button("Save effort & allocation"):
+            logic.set_effort(team["id"], new_effort)
             logic.set_build_pct(team["id"], bpct)
-            st.success("Allocation saved. (Round-1 deliverable ✓)")
+            st.success("Saved. (Round-1 deliverable ✓)")
             st.rerun()
     with a2:
         _pareto_time_chart(logic.time_allocation(
-            {**team, "build_pct": bpct}))
+            {**team, "build_pct": bpct, "effort_hours": new_effort}))
 
     skills = db.get_team_skills(team["id"])
     boosts = logic.hire_boost(team["id"])
@@ -440,39 +451,49 @@ def founder_skills(team):
                 "consider training or hiring.")
 
     st.write("### Your team's skills")
-    st.caption("Founders learn by doing — completing each round's work grows the skills that "
-               "round used, on top of any training or hiring.")
+    st.caption("Train by investing founder-hours — partial effort is **banked as progress**, so "
+               "8 of 10 hours carries over and you finish the level next round. Founders also "
+               "learn by doing: completing a round grows the skills it used.")
+    avail = int(team["founder_hours"])
     for s in content.FOUNDER_SKILLS:
         base = skills.get(s["key"], 0)
         boost = boosts.get(s["key"], 0)
-        eff = min(content.HIRE_SKILL_CAP, base + boost)
+        efflv = min(content.HIRE_SKILL_CAP, base + boost)
         needed = s["key"] in needs
-        gap = needed and eff <= 2
+        gap = needed and efflv <= 2
+        _, xp, nxt = logic.skill_progress(team["id"], s["key"])
         with st.container(border=True):
             c1, c2 = st.columns([3, 1])
             title = f"**{s['name']}** — founder {base}/{content.SKILL_MAX}"
             if boost:
-                title += f"  ·  +{boost} hired → **effective {eff}**"
+                title += f"  ·  +{boost} hired → **effective {efflv}**"
             if needed:
                 title += "  · 🎯 needed now"
             c1.markdown(title)
-            c1.progress(eff / content.SKILL_MAX)
+            c1.progress(efflv / content.SKILL_MAX)
             c1.caption(f"_{s['definition']}_")
             c1.caption(f"Effect: {s['effect']}  ·  Supports **{s['dimension']}**.")
+            if base < content.SKILL_MAX:
+                c1.caption(f"📚 Training progress to next level: **{xp}/{nxt} hrs** banked.")
             if gap:
-                c1.caption("⚠️ This is needed this round but weak — train it or hire in.")
-            # Train / undo controls
+                c1.caption("⚠️ Needed this round but weak — invest time or hire in.")
+            # Invest / undo controls
             if base >= content.SKILL_MAX:
                 c2.success("Maxed")
             else:
-                cost = logic.skill_train_cost(base)
-                if c2.button(f"Train +1 ({cost} hrs)", key=f"train_{s['key']}"):
-                    ok, msg = logic.train_skill(team["id"], s["key"])
+                remaining = max(1, nxt - xp)
+                default = min(remaining, avail) if avail > 0 else 0
+                hrs = c2.number_input("Invest hrs", 0, max(0, avail), int(default),
+                                      key=f"inv_{s['key']}", label_visibility="collapsed",
+                                      help=f"Hours to invest now (you have {avail}). "
+                                           f"{remaining} more hrs finishes this level.")
+                if c2.button("Train", key=f"train_{s['key']}", disabled=(avail <= 0)):
+                    ok, msg = logic.invest_training(team["id"], s["key"], hrs)
                     (st.success if ok else st.error)(msg)
                     st.rerun()
-            if base > logic._card_base_level(team["id"], s["key"]):
-                if c2.button("Undo training", key=f"untrain_{s['key']}",
-                             help="Revert one trained level and refund the hours."):
+            if xp > 0 or base > logic._card_base_level(team["id"], s["key"]):
+                if c2.button("Undo", key=f"untrain_{s['key']}",
+                             help="Refund banked hours, or revert one trained level."):
                     ok, msg = logic.untrain_skill(team["id"], s["key"])
                     (st.success if ok else st.error)(msg)
                     st.rerun()
@@ -688,9 +709,21 @@ def founder_opportunity(team):
 
     st.divider()
     st.write("### Candidate ventures")
-    st.caption("Generating and scoring at least three ventures is the **Opportunity framing** "
-               "task (typically Round 2). You can start jotting ideas now; comparing them "
-               "deliberately is a constrained decision, not free brainstorming.")
+    # Candidate ventures belong to the Opportunity-framing round. Under Strict mode
+    # they're view-only until that round is active (or overdue).
+    _cur = db.current_round()
+    _opp_now = any(tp["key"] == "opportunity_framing" for tp in logic.topics_for_round(_cur))
+    _opp_carried = any(d.get("check") == "ventures_ge_3"
+                       for d in logic.outstanding_prior(team["id"], _cur))
+    ventures_editable = editable and (not logic.strict_round_mode() or _opp_now or _opp_carried)
+    if not ventures_editable:
+        _opp_round = logic.page_unlock_round("Founder & Opportunity")  # base tool = 1
+        st.info("🔒 Generating and scoring 3+ ventures is the **Opportunity framing** task — it "
+                "opens in that round. For now this is view-only. (Your instructor can allow early "
+                "edits by turning off Strict round mode.)")
+    else:
+        st.caption("Generate at least three ventures and score each — comparing options "
+                   "deliberately is a constrained decision, not free brainstorming.")
 
     ventures = db.get_ventures(team["id"])
     for i, v in enumerate(ventures):
@@ -701,7 +734,7 @@ def founder_opportunity(team):
             st.write(f"**Evidence availability:** {v.get('evidence','—')}/5")
             st.write(f"**Experiment affordability:** {v.get('afford','—')}/5")
             st.write(f"**Notes:** {v.get('notes','')}")
-            if st.button("Remove", key=f"rmv_{i}", disabled=not editable,
+            if st.button("Remove", key=f"rmv_{i}", disabled=not ventures_editable,
                          help="Delete this candidate venture."):
                 ventures.pop(i)
                 db.set_ventures(team["id"], ventures)
@@ -738,7 +771,7 @@ def founder_opportunity(team):
             "Notes",
             help="Anything else worth remembering about this option — risks, ideas, "
                  "who to talk to.")
-        if st.form_submit_button("Add venture", disabled=not editable,
+        if st.form_submit_button("Add venture", disabled=not ventures_editable,
                                  help="Save this candidate venture to your list.") and name:
             ventures.append({"name": name, "importance": importance, "fit": fit,
                              "access": access, "evidence": evidence, "afford": afford,

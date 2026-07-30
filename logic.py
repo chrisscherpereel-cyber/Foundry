@@ -492,20 +492,56 @@ def skill_train_cost(level):
     return int((level + 1) * _econ("train_mult"))
 
 
-def train_skill(team_id, skill_key):
-    """Spend founder-hours to raise a skill by one level. Returns (ok, message)."""
-    skills = db.get_team_skills(team_id)
-    lvl = skills.get(skill_key, 1)
+def cost_to_next(level):
+    """Effective hours to raise a skill from `level` to level+1."""
+    return skill_train_cost(level)
+
+
+def skill_progress(team_id, skill_key):
+    """(current_level, banked_xp_hours, cost_to_next_level)."""
+    lvl = db.get_team_skills(team_id).get(skill_key, 0)
+    xp = db.get_skill_xp(team_id, skill_key)
+    return lvl, xp, cost_to_next(lvl)
+
+
+def add_skill_progress(team_id, skill_key, eff_hours):
+    """Bank effective-hours of progress toward a skill; level up while it covers the
+    cost. Partial progress is kept (never wasted). Returns levels gained."""
+    xp = db.get_skill_xp(team_id, skill_key) + eff_hours
+    lvl = db.get_team_skills(team_id).get(skill_key, 0)
+    gained = 0
+    while lvl < content.SKILL_MAX and xp >= cost_to_next(lvl):
+        xp -= cost_to_next(lvl)
+        lvl += 1
+        gained += 1
+    if lvl >= content.SKILL_MAX:
+        xp = 0
+    db.set_skill_level(team_id, skill_key, lvl)
+    db.set_skill_xp(team_id, skill_key, xp)
+    return gained
+
+
+def invest_training(team_id, skill_key, hours):
+    """Spend founder-hours training a skill; the hours bank as XP toward the next
+    level (partial effort carries over). Returns (ok, message)."""
+    hours = int(hours)
+    if hours <= 0:
+        return False, "Enter a positive number of hours."
+    lvl = db.get_team_skills(team_id).get(skill_key, 0)
     if lvl >= content.SKILL_MAX:
         return False, "Already at maximum level."
-    cost = skill_train_cost(lvl)
     ok, msg = db.adjust_resources(
-        team_id, hours=-cost, kind="training",
+        team_id, hours=-hours, kind="training",
         description=f"Trained {content.FOUNDER_SKILL_BY_KEY[skill_key]['name']}")
     if not ok:
         return False, msg
-    db.set_skill_level(team_id, skill_key, lvl + 1)
-    return True, f"Trained to level {lvl + 1} (spent {cost} founder-hours)."
+    gained = add_skill_progress(team_id, skill_key, hours)
+    name = content.FOUNDER_SKILL_BY_KEY[skill_key]["name"]
+    if gained:
+        _, xp, nxt = skill_progress(team_id, skill_key)
+        return True, f"Invested {hours}h — {name} rose {gained} level(s)! ({xp}/{nxt} toward next)."
+    _, xp, nxt = skill_progress(team_id, skill_key)
+    return True, f"Invested {hours}h — banked toward {name} ({xp}/{nxt} to next level)."
 
 
 def _card_base_level(team_id, skill_key):
@@ -514,19 +550,25 @@ def _card_base_level(team_id, skill_key):
 
 
 def untrain_skill(team_id, skill_key):
-    """Reverse one level of training, refunding the hours. Won't go below the
-    founder card's starting level. Returns (ok, message)."""
-    skills = db.get_team_skills(team_id)
-    lvl = skills.get(skill_key, 1)
+    """Change your mind: first refund any banked (not-yet-levelled) training hours;
+    otherwise revert one trained level (down to the founder card's starting level)
+    and refund its cost. Learning-by-doing progress and starting levels are kept."""
+    lvl = db.get_team_skills(team_id).get(skill_key, 0)
+    xp = db.get_skill_xp(team_id, skill_key)
     base = _card_base_level(team_id, skill_key)
-    if lvl <= base:
-        return False, "This is the founder's starting level — nothing trained to undo."
-    refund = skill_train_cost(lvl - 1)
-    db.adjust_resources(team_id, hours=refund, kind="training_undo",
-                        description=f"Undid training: {content.FOUNDER_SKILL_BY_KEY[skill_key]['name']}",
-                        allow_negative=True)
-    db.set_skill_level(team_id, skill_key, lvl - 1)
-    return True, f"Reverted to level {lvl - 1} (refunded {refund} founder-hours)."
+    name = content.FOUNDER_SKILL_BY_KEY[skill_key]["name"]
+    if xp > 0:
+        db.adjust_resources(team_id, hours=xp, kind="training_undo",
+                            description=f"Refunded banked training: {name}", allow_negative=True)
+        db.set_skill_xp(team_id, skill_key, 0)
+        return True, f"Refunded {xp} banked training hours for {name}."
+    if lvl > base:
+        refund = cost_to_next(lvl - 1)
+        db.adjust_resources(team_id, hours=refund, kind="training_undo",
+                            description=f"Undid a level of {name}", allow_negative=True)
+        db.set_skill_level(team_id, skill_key, lvl - 1)
+        return True, f"{name} reverted to level {lvl - 1} (refunded {refund}h)."
+    return False, "Nothing to undo — this is the founder's starting level."
 
 
 # ---- Hiring ---------------------------------------------------------------- #
@@ -579,8 +621,9 @@ def productive_hours(raw):
     return int(round(content.FULL_PRODUCTIVITY_HOURS + over * content.OVERWORK_PRODUCTIVITY))
 
 
-def weekly_hours(team):
-    """A team's raw weekly hours (Director default overrides the stored value)."""
+def recommended_weekly(team):
+    """The recommended weekly hours (Director default or difficulty), the fully
+    productive target (≤ 40 counts fully; this is usually 40–80)."""
     override = db.get_setting("econ_hours_per_week")
     if override not in (None, ""):
         try:
@@ -590,15 +633,39 @@ def weekly_hours(team):
     return team.get("hours_per_round") or content.DEFAULT_HOURS_PER_WEEK
 
 
+def effort_hours(team):
+    """The raw hours the founder actually chooses to work this week (40–80).
+    Defaults to the recommended level; the team may push it up to the hard cap."""
+    e = team.get("effort_hours")
+    base = recommended_weekly(team)
+    val = e if e else base
+    return max(content.FULL_PRODUCTIVITY_HOURS, min(content.MAX_WEEKLY_HOURS, val))
+
+
+# Backwards-compatible alias used by older callers / the founder card.
+def weekly_hours(team):
+    return effort_hours(team)
+
+
 def admin_hours(team):
     """Unavoidable admin/coordination time each round (before building or learning)."""
-    return int(round(productive_hours(weekly_hours(team)) * content.ADMIN_OVERHEAD_PCT))
+    return int(round(productive_hours(effort_hours(team)) * content.ADMIN_OVERHEAD_PCT))
 
 
 def round_hours_budget(team):
-    """Discretionary founder-hours for a round after admin overhead and managing hires."""
-    eff = productive_hours(weekly_hours(team))
+    """Discretionary EFFECTIVE founder-hours for a round. The founder's raw effort is
+    converted to effective hours (diminishing past 40), then admin overhead and time
+    spent managing hires are removed. This is what building and training draw from."""
+    eff = productive_hours(effort_hours(team))
     return max(0, eff - admin_hours(team) - management_hours(team["id"]))
+
+
+def set_effort(team_id, raw):
+    """Set how hard the founder works this week and reset this round's hours to match."""
+    raw = max(content.FULL_PRODUCTIVITY_HOURS, min(content.MAX_WEEKLY_HOURS, int(raw)))
+    db.update_team(team_id, effort_hours=raw)
+    db.update_team(team_id, founder_hours=round_hours_budget(db.get_team(team_id)))
+    db.set_ack(team_id, "time_plan_set")
 
 
 def get_build_pct(team):
@@ -634,20 +701,6 @@ def time_allocation(team):
 
 
 # ---- Founder learning-by-doing --------------------------------------------- #
-def add_skill_xp(team_id, skill_key, n):
-    """Add learning XP to a skill; level up when it crosses the threshold."""
-    xp = db.get_skill_xp(team_id, skill_key) + n
-    lvl = db.get_team_skills(team_id).get(skill_key, 0)
-    leveled = 0
-    while xp >= content.LEARNING_XP_PER_LEVEL and lvl < content.SKILL_MAX:
-        xp -= content.LEARNING_XP_PER_LEVEL
-        lvl += 1
-        leveled += 1
-    db.set_skill_level(team_id, skill_key, lvl)
-    db.set_skill_xp(team_id, skill_key, xp)
-    return leveled
-
-
 def round_own_complete(team_id, rnd):
     """Whether a team finished THAT round's own decisions and concept checks
     (ignoring backlog carried from earlier rounds)."""
@@ -661,7 +714,7 @@ def _apply_round_learning(team_id, completed_round):
     if not round_own_complete(team_id, completed_round):
         return
     for k in skills_needed_this_round(completed_round):
-        add_skill_xp(team_id, k, 1)
+        add_skill_progress(team_id, k, content.LEARNING_HOURS_PER_ROUND)
 
 
 # ---- Per-round reset, salary, and learning --------------------------------- #
@@ -902,11 +955,13 @@ def quick_setup_teams(n_teams, difficulty, opportunity_mode="distinct",
             name, territory, base_card,
             capital=preset["capital"], evidence_credits=preset["credits"],
             founder_hours=preset["hours"], market_potential=preset["market_potential"],
-            hours_per_round=preset["hours"],   # raw weekly hours
+            hours_per_round=preset["hours"],   # recommended weekly hours
         )
-        # start with this week's effective (productive) hours available
-        db.update_team(db.get_team_by_code(code)["id"],
-                       founder_hours=productive_hours(preset["hours"]))
+        # start at the recommended effort with this week's effective hours available
+        new_team = db.get_team_by_code(code)
+        db.update_team(new_team["id"], effort_hours=preset["hours"])
+        db.update_team(new_team["id"],
+                       founder_hours=round_hours_budget(db.get_team(new_team["id"])))
         created.append({"name": name, "code": code, "territory": territory})
     return created
 

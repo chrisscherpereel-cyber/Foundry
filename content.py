@@ -132,9 +132,11 @@ OVERWORK_PRODUCTIVITY = 0.5    # each hour beyond 40 counts as this much
 MAX_WEEKLY_HOURS = 80
 DEFAULT_HOURS_PER_WEEK = 60
 
-# Founder learning-by-doing: XP earned per completed round on the round's focus
-# skills; this many XP raises a skill by one level.
-LEARNING_XP_PER_LEVEL = 3
+# Skill progress (XP) is measured in EFFECTIVE hours. A level costs
+# logic.skill_train_cost(level) effective hours; investing time or completing rounds
+# banks progress toward it (partial effort is never wasted).
+# Effective hours a founder banks toward the round's focus skills by completing it:
+LEARNING_HOURS_PER_ROUND = 4
 
 # --------------------------------------------------------------------------- #
 # Founder / team skills — structured capabilities the team holds and can grow.
