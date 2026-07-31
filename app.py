@@ -180,6 +180,11 @@ def _sidebar_todo(team):
     if unread:
         items.append({"label": f"Read {unread} new Inbox message(s)", "tool": "Inbox",
                       "done": False})
+    # Any AI use still unverified is a to-do (verification is what earns credit).
+    ai_unv = logic.ai_unverified_count(team["id"])
+    if ai_unv:
+        items.append({"label": f"Verify {ai_unv} AI use(s)", "tool": "AI Assist Log",
+                      "done": False})
     if not items:
         return
     done = sum(1 for i in items if i["done"])
