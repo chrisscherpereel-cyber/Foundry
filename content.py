@@ -1298,6 +1298,19 @@ AI_CLAIM_TYPES = ["Fact (says it's true)", "Prediction (says it will happen)",
 AI_DATA_SOURCES = ["No source given", "Cited a source but I haven't checked it",
                    "I checked the source myself"]
 
+# How the AI was used (an indication of the kind of help).
+AI_USE_TYPES = [
+    "Brainstorm / generate options", "Draft or write text", "Summarize / explain",
+    "Critique or check our work", "Analyze data / numbers", "Plan an experiment", "Other",
+]
+
+# AUDIT answered mostly by dropdown; text notes optional.
+AI_AUDIT_ASSUMPTIONS = ["Not checked yet", "Some identified", "Listed the key assumptions"]
+AI_AUDIT_UNSUPPORTED = ["Not checked yet", "None spotted", "A few unsupported claims",
+                        "Mostly unsupported"]
+AI_VERIFY_METHODS = ["Not planned yet", "Ask or observe real customers", "Run an experiment",
+                     "Use evidence we already have", "Other"]
+
 # Worked examples shown beside the two required quick-log fields.
 AI_CLAIM_EXAMPLE = "e.g. 'Coffee shops will pay $49/mo for automated inventory forecasting.'"
 AI_VERIFY_EXAMPLE = ("e.g. 'Ask 5 real shop owners for a paid pre-order — not the AI — and see "

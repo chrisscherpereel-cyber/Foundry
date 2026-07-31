@@ -362,6 +362,7 @@ def init_db():
         _ensure_column(conn, "ai_logs", "verify_plan", "TEXT")    # how they'll check it
         _ensure_column(conn, "ai_logs", "assumption_id", "INTEGER")
         _ensure_column(conn, "ai_logs", "experiment_id", "INTEGER")
+        _ensure_column(conn, "ai_logs", "use_type", "TEXT")   # how the AI was used
         # Decision Journal: one round-adaptive focus question per entry.
         _ensure_column(conn, "reflections", "focus_prompt", "TEXT")
         _ensure_column(conn, "reflections", "focus_answer", "TEXT")
@@ -1041,8 +1042,8 @@ def add_ai_log(team_id, data):
             """INSERT INTO ai_logs(team_id, round, tool_area, prompt, ai_output,
                 audit_a, audit_u, audit_d, audit_i, audit_t, status,
                 claim_type, data_source, verify_plan, assumption_id, experiment_id,
-                created_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                use_type, created_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (team_id, data.get("round", 1), data.get("tool_area", ""),
              data.get("prompt", ""), data.get("ai_output", ""),
              data.get("audit_a", ""), data.get("audit_u", ""), data.get("audit_d", ""),
@@ -1050,7 +1051,7 @@ def add_ai_log(team_id, data):
              data.get("status", "Unverified"),
              data.get("claim_type"), data.get("data_source"),
              data.get("verify_plan", ""), data.get("assumption_id"),
-             data.get("experiment_id"), now()),
+             data.get("experiment_id"), data.get("use_type"), now()),
         )
         conn.commit()
         return cur.lastrowid
