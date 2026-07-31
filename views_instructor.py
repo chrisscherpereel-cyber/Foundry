@@ -384,43 +384,97 @@ def schedule():
 def round_control():
     st.subheader("🎛️ Round & Semester Control")
     _guide(
-        "You are the Venture Foundry Director. This page sets which week (round) the whole "
-        "cohort is on and lets you change the login PIN. The current round is stamped onto "
-        "events, scores, and reflections, and it drives the semester map below so you always "
-        "know what students should be working on.",
+        "You are the Venture Foundry Director. **This is where you advance the cohort to the "
+        "next round — which is what unlocks the next round's tools for every team.** There are "
+        "two ways to advance: click the Advance button here whenever you're ready, or set a "
+        "date/time on Schedule & Timing and let it advance automatically. The current round is "
+        "stamped onto events, scores, and reflections.",
         steps=[
-            "Set the current round to match your class week, then click Set round.",
-            "Change the instructor PIN from the default and click Update PIN.",
-            "Use the 15-week map as your run-of-show for what happens each week.",
+            "When the class is ready for the next week, click ▶️ Advance to the next round.",
+            "Advancing unlocks that round's tools, applies learning, resets founder hours, and "
+            "charges any specialist salaries.",
+            "To move without going in order, use 'Jump to a specific round'.",
+            "Prefer automatic? Set advance date/times on Schedule & Timing.",
         ],
         terms=[
-            ("Round", "The current simulation week (1–15). Everything new is tagged with it."),
+            ("Advance", "Move the whole cohort to the next round and unlock its tools."),
+            ("Round", "The current simulation week. Everything new is tagged with it."),
             ("Instructor PIN", "The password teams cannot see; it opens this Director console."),
         ],
     )
     cur = db.current_round()
     total = logic.total_rounds()
-    c1, c2 = st.columns([1, 3])
-    with c1:
-        new_round = st.number_input(
-            "Current round", 1, total, min(cur, total),
-            help="The round the whole cohort is on. Tagged onto new events, scores, and "
-                 "reflections. Change the number of rounds and topic order on the "
-                 "Schedule & Timing page.")
-        if st.button("Set round", help="Apply the round number to the whole cohort."):
-            advanced = int(new_round) > cur
-            db.set_setting("current_round", int(new_round))
-            msg = f"Round set to {new_round}."
-            if advanced and logic.auto_flag("auto_run_on_advance", default=False):
-                logic.run_autopilot(int(new_round))
-                msg += " Auto-Director applied for the new round."
+
+    # ---- Advance / rewind (the main action of this page) --------------------
+    st.markdown(f"## 📍 Cohort is on **Round {cur} of {total}**")
+
+    def _unlocks_for(rnd):
+        tools = [p for p in logic.newly_unlocked(rnd) if p not in content.BASE_TOOLS]
+        titles = [t["title"] for t in logic.topics_for_round(rnd)]
+        return tools, titles
+
+    if cur < total:
+        ntools, ntitles = _unlocks_for(cur + 1)
+        st.markdown(f"### ▶️ Advance the cohort to Round {cur + 1}")
+        if ntitles:
+            st.caption("Next round covers: **" + " + ".join(ntitles) + "**")
+        if ntools:
+            st.caption("Unlocks these tools for every team: **" + ", ".join(ntools) + "**")
+        else:
+            st.caption("No new tools unlock next round — teams keep refining current work.")
+        ac1, ac2 = st.columns([2, 3])
+        if ac1.button(f"▶️ Advance to Round {cur + 1}", type="primary",
+                      help="Moves the whole cohort forward one round and unlocks its tools."):
+            new_r = cur + 1
+            db.set_setting("current_round", new_r)
+            logic.on_round_change(new_r)   # apply learning, reset hours, charge salaries
+            msg = f"Advanced to Round {new_r} — its tools are now unlocked for all teams."
+            if logic.auto_flag("auto_run_on_advance", default=False):
+                logic.run_autopilot(new_r)
+                msg += " Auto-Director applied."
             st.success(msg)
             st.rerun()
+        ac2.caption("Do this once your class has finished the current round's work (and any "
+                    "decision deadline has passed).")
+    else:
+        st.success(f"🏁 You're on the final round ({total}). Add more rounds on Schedule & "
+                   "Timing if your course needs them.")
+
+    with st.expander("↔️ Go back a round or jump to a specific round"):
+        jc1, jc2 = st.columns(2)
+        if cur > 1 and jc1.button(f"◀️ Back to Round {cur - 1}",
+                                  help="Return the cohort to the previous round."):
+            db.set_setting("current_round", cur - 1)
+            st.warning(f"Moved back to Round {cur - 1}.")
+            st.rerun()
+        with jc2:
+            jump = st.number_input("Jump to round", 1, total, min(cur, total),
+                                   help="Set any round directly (non-sequential).")
+            if st.button("Set round", help="Apply this exact round to the whole cohort."):
+                advanced = int(jump) > cur
+                db.set_setting("current_round", int(jump))
+                logic.on_round_change(int(jump))
+                msg = f"Round set to {jump}."
+                if advanced and logic.auto_flag("auto_run_on_advance", default=False):
+                    logic.run_autopilot(int(jump))
+                    msg += " Auto-Director applied."
+                st.success(msg)
+                st.rerun()
+
     nxt = logic.next_scheduled_advance()
     if nxt:
-        st.caption(f"⏱️ Next scheduled auto-advance: Round {nxt[0]} at {nxt[1]} "
-                   "(applies when the app is next opened after that time).")
-    with c2:
+        st.info(f"⏱️ **Automatic advance scheduled:** Round {nxt[0]} at {nxt[1]} — applies the "
+                "next time the app is opened after that time. (You can still advance manually "
+                "above at any point.)")
+    else:
+        st.caption("💡 No automatic advance is scheduled. Advance manually above, or set "
+                   "date/times on **Schedule & Timing** to automate it.")
+
+    # ---- Console settings ----------------------------------------------------
+    st.divider()
+    st.markdown("### ⚙️ Console settings")
+    c2a, c2b = st.columns(2)
+    with c2a:
         pin = st.text_input(
             "Instructor PIN (change)", value=db.get_setting("instructor_pin", "foundry"),
             help="The password for this Director console. Change it from the default 'foundry' "
@@ -428,6 +482,7 @@ def round_control():
         if st.button("Update PIN", help="Save the new instructor PIN."):
             db.set_setting("instructor_pin", pin)
             st.success("PIN updated.")
+    with c2b:
         strict = st.checkbox(
             "Strict round mode", value=logic.strict_round_mode(),
             help="When on, students can only edit tools relevant to the current round; tools "
@@ -936,6 +991,139 @@ def scoring():
 
 
 # --------------------------------------------------------------------------- #
+# Round Scores — one automated 0–100 grade per team for the committed round work
+# --------------------------------------------------------------------------- #
+def _round_score_email(team, rnd, rs):
+    comp = rs["components"]
+    lines = [f"Round {rnd} score for {team['name']}: {rs['score']:.0f}/100 "
+             f"({rs['grade']}).", "",
+             "How it breaks down (each 0–100, before weighting):",
+             f"  • Commitment / completion: {comp['commitment']:.0f}",
+             f"  • Evidence quality: {comp['evidence']:.0f}",
+             f"  • Model coherence: {comp['coherence']:.0f}",
+             f"  • Concept coverage: {comp['concepts']:.0f}"]
+    if rs["penalty"]:
+        lines.append(f"  • Risk penalty: -{rs['penalty']:.0f} "
+                     f"({rs['exposed_assumptions']} important untested assumption(s))")
+    lines += ["", ("You committed this round's work before scoring." if rs["committed"]
+                   else "Note: this round was scored on your work as-is (not formally committed)."),
+              "", "— The Venture Foundry Director"]
+    return {"subject": f"Round {rnd} score — {team['name']}", "body": "\n".join(lines)}
+
+
+def round_scores():
+    st.subheader("🏁 Round Scores (out of 100)")
+    _guide(
+        "This gives every team a single automated 0–100 grade for the work they committed in a "
+        "round. It blends four things — how much of the round's required work is complete "
+        "(commitment), the strength of their evidence, their business-model coherence, and how "
+        "many of the round's concepts they covered — then subtracts a penalty for important "
+        "assumptions they've left untested. Use the sensitivity controls to set how much each "
+        "part matters and how harshly to grade overall.",
+        steps=[
+            "Set the four component weights (they're normalized, so relative size is what counts).",
+            "Set the strictness dial: left is lenient, right is harsh.",
+            "Pick the round and read the table — each team's score updates live.",
+            "Optionally email any team its score breakdown.",
+        ],
+        terms=[
+            ("Commitment", "Share of the round's decisions + concept-checks completed."),
+            ("Strictness", "A curve on the final score: lenient lifts scores, strict compresses them."),
+            ("Risk penalty", "Points removed for important, still-untested assumptions."),
+        ],
+    )
+    teams = db.list_teams()
+    if not teams:
+        st.info("No teams yet. Create teams on the Team Setup page first.")
+        return
+
+    cfg = logic.get_round_score_config()
+
+    # ---- Sensitivity controls ------------------------------------------------
+    st.markdown("### 🎚️ Scoring sensitivity")
+    labels = {"commitment": "Commitment / completion", "evidence": "Evidence quality",
+              "coherence": "Model coherence", "concepts": "Concept coverage"}
+    with st.form("round_score_cfg"):
+        cols = st.columns(4)
+        new_w = {}
+        for i, k in enumerate(logic.ROUND_SCORE_COMPONENTS):
+            new_w[k] = cols[i].slider(labels[k], 0, 100, int(cfg["weights"][k]),
+                                      help=f"Relative weight of {labels[k].lower()}.")
+        strict = st.slider(
+            "Strictness (← lenient · harsh →)", 0, 100, int(cfg["strictness"]),
+            help="50 is neutral. Below 50 lifts scores (forgiving); above 50 makes high "
+                 "scores harder to reach (demanding).")
+        wsum = sum(new_w.values()) or 1
+        st.caption("Normalized weights: " + " · ".join(
+            f"{labels[k]} {100*new_w[k]/wsum:.0f}%" for k in logic.ROUND_SCORE_COMPONENTS))
+        c1, c2 = st.columns(2)
+        if c1.form_submit_button("Save sensitivity", help="Apply these settings to all scores."):
+            logic.set_round_score_config(new_w, strict)
+            st.success("Saved.")
+            st.rerun()
+        if c2.form_submit_button("Reset to defaults"):
+            d = logic.default_round_score_config()
+            logic.set_round_score_config(d["weights"], d["strictness"])
+            st.rerun()
+
+    # ---- Scores table --------------------------------------------------------
+    st.markdown("### 📋 Scores")
+    rnd = st.number_input("Round to score", 1, logic.total_rounds(), db.current_round(),
+                          help="Round scores are computed live from each team's current work.")
+    rnd = int(rnd)
+    ds = logic.deadline_status(rnd)
+    if ds["set"]:
+        st.caption(f"⏰ Decisions due: **{ds['due_text']}** "
+                   + ("· deadline passed" if ds["passed"] else f"· {ds['remaining']}"))
+    else:
+        st.caption("🗓️ No decision deadline is set for this round (set advance times on "
+                   "**Schedule & Timing**).")
+
+    rows = []
+    scored = {}
+    for t in teams:
+        rs = logic.round_score(t["id"], rnd, cfg)
+        scored[t["id"]] = rs
+        c = rs["components"]
+        rows.append({
+            "Team": t["name"],
+            "Score /100": rs["score"],
+            "Grade": rs["grade"],
+            "Commit": "✅" if rs["committed"] else "—",
+            "Completion": c["commitment"],
+            "Evidence": c["evidence"],
+            "Coherence": c["coherence"],
+            "Concepts": c["concepts"],
+            "Risk −": rs["penalty"],
+        })
+    st.dataframe(sorted(rows, key=lambda r: r["Score /100"], reverse=True),
+                 use_container_width=True, hide_index=True)
+    st.caption("Scores recompute live from current work and your sensitivity settings above.")
+
+    # ---- Per-team detail + email --------------------------------------------
+    st.markdown("### ✉️ Send a score to a team")
+    team = st.selectbox("Team", teams, format_func=lambda t: t["name"],
+                        key="rs_team", help="Preview and send this team's score email.")
+    rs = scored[team["id"]]
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Round score", f"{rs['score']:.0f}/100", rs["grade"])
+    m2.metric("Committed?", "Yes" if rs["committed"] else "No")
+    m3.metric("Risk penalty", f"-{rs['penalty']:.0f}")
+    email = _round_score_email(team, rnd, rs)
+    with st.popover("Preview / edit score email"):
+        subj = st.text_input("Subject", value=email["subject"], key=f"rs_subj_{team['id']}")
+        body = st.text_area("Body", value=email["body"], height=280, key=f"rs_body_{team['id']}")
+        if st.button("Send to team Inbox", key=f"rs_send_{team['id']}"):
+            db.add_message(team["id"], subj, body, rnd)
+            st.success("Sent.")
+    if st.button("Send suggested score to all teams", key="rs_send_all"):
+        for t in teams:
+            e = _round_score_email(t, rnd, scored[t["id"]])
+            db.add_message(t["id"], e["subject"], e["body"], rnd)
+        st.success(f"Sent Round {rnd} scores to every team.")
+
+
+# --------------------------------------------------------------------------- #
 # Value Proposition Auction oversight
 # --------------------------------------------------------------------------- #
 def vp_auction():
@@ -1029,13 +1217,19 @@ def overview():
         esum = logic.evidence_summary(t["id"])
         arep = logic.assumption_risk_report(t["id"])
         eff = logic.experiment_efficiency(t["id"])
+        flagged = sum(1 for e in db.list_evidence(t["id"])
+                      if logic.evidence_flags(e["description"], e["source"], e["strength"]))
         rows.append({
             "Team": t["name"], "Stage": t["stage"], "Capital": f"${t['capital']:,.0f}",
             "Credits": round(t["evidence_credits"], 1), "Valuation": f"${val['valuation']:,.0f}",
             "Evidence items": esum["count"], "Behavioral": esum["behavioral"],
+            "⚠️ Flagged evidence": flagged,
             "High-risk untested": len(arep["exposed"]), "Experiments": eff["experiments"],
         })
     st.dataframe(rows, use_container_width=True, hide_index=True)
+    st.caption("**⚠️ Flagged evidence** = items whose wording may not match the strength the "
+               "team chose (likely opinion logged as behavior, or vice-versa). A coaching "
+               "signal, not an automatic penalty.")
 
     # Fairness check — are all teams starting on equal footing?
     diff = db.get_setting("difficulty", "not set")

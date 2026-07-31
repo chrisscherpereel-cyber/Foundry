@@ -150,6 +150,65 @@ def _ai_check_notice():
         st.markdown(content.AI_PROTOCOL_SUMMARY)
 
 
+def _commitment_panel(team, cur, all_items, done_n, complete):
+    """Deadline + commit/decommit controls for the current round."""
+    st.divider()
+    st.write("### 🔒 Commit your round")
+    state = logic.commitment_state(team["id"], cur)
+    ds = state["deadline"]
+
+    # When are decisions due?
+    if ds["set"]:
+        if ds["passed"]:
+            st.error(f"⏰ **Deadline passed** — decisions were due {ds['due_text']}. "
+                     "This round is locked; your last committed work is what counts.")
+        else:
+            st.info(f"⏰ **Decisions due {ds['due_text']}** ({ds['remaining']}). "
+                    "Commit when you're ready — you can withdraw and keep editing any time "
+                    "before the deadline.")
+    else:
+        st.warning("🗓️ **No deadline is set for this round.** Your instructor hasn't scheduled "
+                   "an advance time, so decisions stay open until they move the simulation "
+                   "forward. You can still commit to signal you're done.")
+
+    # What's still open (must be decided) vs done.
+    open_items = [p for p in all_items if not p["done"]]
+    if open_items:
+        with st.expander(f"⚠️ {len(open_items)} decision(s) still open — you can commit now "
+                         "and finish them, or complete them first", expanded=not complete):
+            for p in open_items:
+                st.markdown(f"- {p['label']}  ·  *{p.get('tool','')}*")
+    else:
+        st.success("All of this round's decisions are complete. ✅")
+
+    # Commit / decommit controls.
+    if state["committed"]:
+        st.success(f"✅ **Committed** for Round {cur}"
+                   + (f" · {state['committed_at']}" if state.get("committed_at") else ""))
+        if state["locked"]:
+            st.caption("The deadline has passed, so this commitment is final.")
+        else:
+            if st.button("↩️ Withdraw commitment (keep editing)", key=f"decommit_{cur}",
+                         help="Unlock your work so you can change it before the deadline."):
+                ok, msg = logic.decommit_round(team["id"], cur)
+                (st.success if ok else st.error)(msg)
+                st.rerun()
+    else:
+        if state["locked"]:
+            st.error("The deadline passed before you committed. Your current work will be "
+                     "scored as-is — ask your instructor if you need an extension.")
+        else:
+            st.caption("Committing locks in this round's work for scoring. You keep full "
+                       "control: withdraw any time before the deadline to make changes.")
+            label = ("✅ Commit this round" if complete
+                     else f"✅ Commit this round now ({done_n}/{len(all_items)} done)")
+            if st.button(label, type="primary", key=f"commit_{cur}",
+                         help="Lock in your decisions for this round."):
+                ok, msg = logic.commit_round(team["id"], cur)
+                (st.success if ok else st.error)(msg)
+                st.rerun()
+
+
 # --------------------------------------------------------------------------- #
 # Round Briefing — the week's learning objectives and simulation task
 # --------------------------------------------------------------------------- #
@@ -221,6 +280,9 @@ def round_briefing(team):
     if cl["carried"]:
         st.markdown("**⏪ Carried over from earlier rounds — finish these now**")
         _render_checklist([{**c, "label": f"(R{c['round']}) {c['label']}"} for c in cl["carried"]])
+
+    # ---- Decision deadline & commitment -------------------------------------
+    _commitment_panel(team, cur, all_items, done_n, complete)
 
     # ---- What must change vs. what can remain -------------------------------
     tool_pages = ["Founder & Opportunity", "Canvases", "VP Auction", "Assumption Map",
@@ -1226,6 +1288,18 @@ def experiments(team):
             "Decision rule",
             placeholder="If supported, build clickable prototype; if refuted, revisit segment",
             help="What you will actually DO depending on the outcome.")
+        st.markdown("**🔮 Predict before you run it** — commit to a forecast now; you'll compare "
+                    "it to reality afterward. Making and checking predictions is how founders "
+                    "build judgment (and catch their own overconfidence).")
+        pc1, pc2 = st.columns(2)
+        predicted = pc1.selectbox(
+            "Your prediction", ["Supported", "Refuted", "Inconclusive"],
+            help="Do you expect this test to SUPPORT or REFUTE the assumption? Be honest — a "
+                 "prediction you're afraid to be wrong about is the most useful one.")
+        confidence = pc2.slider(
+            "Confidence in your prediction (%)", 50, 100, 70,
+            help="How sure are you? 50 = a coin flip; 100 = certain. You'll see later how your "
+                 "confidence compared to how often you were actually right.")
         submitted = st.form_submit_button(
             "Purchase & design experiment",
             help="Deducts the cost and saves the experiment. The assumption becomes 'Testing.'")
@@ -1236,7 +1310,8 @@ def experiments(team):
                 st.error("Hypothesis, success threshold, and failure threshold are required.")
             else:
                 ok, msg, _ = logic.purchase_experiment(
-                    team["id"], card, assum_id, hypothesis, metric, success, failure, decision)
+                    team["id"], card, assum_id, hypothesis, metric, success, failure, decision,
+                    predicted_outcome=predicted, confidence=int(confidence))
                 if ok:
                     db.update_assumption(assum_id, status="Testing")
                     st.success(msg)
@@ -1247,6 +1322,30 @@ def experiments(team):
     st.divider()
     st.write("### Your experiments")
     st.caption("Run each test in the real world, then come back and record what happened.")
+
+    # Calibration scoreboard — forecast vs. reality across resolved experiments.
+    cal = logic.calibration_summary(team["id"])
+    if cal["n"]:
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Predictions scored", cal["n"],
+                  help="Resolved experiments where you made a prediction.")
+        k2.metric("Hit rate", f"{cal['hit_rate']:.0f}%",
+                  help="How often your prediction matched the actual outcome.")
+        k3.metric("Avg confidence", f"{cal['avg_confidence']:.0f}%",
+                  help="How sure you said you were, on average.")
+        gap = cal["overconfidence_gap"]
+        k4.metric("Calibration gap", f"{gap:+.0f}",
+                  help="Avg confidence minus hit rate. Positive = overconfident; near 0 = "
+                       "well-calibrated; negative = under-confident.")
+        if gap is not None and gap >= 15:
+            st.warning("🔎 You've been **more confident than correct** — a classic founder trap. "
+                       "Treat your strong hunches as the ones most worth testing cheaply first.")
+        elif gap is not None and gap <= -15:
+            st.info("You've been **more right than you felt** — trust your evidence a bit more, "
+                    "and don't over-test what you already know.")
+        elif gap is not None:
+            st.success("Nicely calibrated — your confidence roughly matches how often you're right.")
+
     exps = db.list_experiments(team["id"])
     if not exps:
         st.caption("No experiments yet.")
@@ -1258,6 +1357,18 @@ def experiments(team):
             st.write(f"**Decision rule:** {e['decision_rule']}")
             st.write(f"**Cost:** ${e['cost_money']} · {e['cost_time']}h · {e['cost_credits']} credits · "
                      f"strength {e['evidence_strength']}/10")
+            # Prediction vs. actual (the calibration payoff).
+            if e.get("predicted_outcome"):
+                line = f"**🔮 You predicted:** {e['predicted_outcome']}"
+                if e.get("confidence") is not None:
+                    line += f" · {e['confidence']}% confident"
+                st.write(line)
+                pc = logic.prediction_correct(e)
+                if pc is True:
+                    st.success(f"✅ Your prediction was right — actual outcome was **{e['outcome']}**.")
+                elif pc is False:
+                    st.error(f"❌ Reality disagreed — you predicted **{e['predicted_outcome']}** but "
+                             f"the outcome was **{e['outcome']}**. That gap is the lesson.")
             if not editable:
                 st.write(f"**Result:** {e['result'] or '_(not recorded)_'}")
                 continue
@@ -1310,52 +1421,89 @@ def evidence(team):
         st.table([{"Evidence": lbl, "Value (0–10)": val} for lbl, val in content.EVIDENCE_LADDER])
 
     assums = db.list_assumptions(team["id"])
+    # Inputs live OUTSIDE a form so the misclassification check updates as you type —
+    # the point is to make you weigh "behavior vs opinion" before you log.
     if editable:
-      with st.form("add_evidence", clear_on_submit=True):
+        st.write("### Log a piece of evidence")
         description = st.text_input(
-            "What did you learn? (one line)",
+            "What did you learn? (one line)", key="ev_desc",
             placeholder="3 of 5 shop owners asked to join a paid pilot.",
             help="A short factual summary of the evidence, not your interpretation.")
         etype = st.selectbox(
-            "Evidence type", [lbl for lbl, _ in content.EVIDENCE_LADDER],
+            "Evidence type", [lbl for lbl, _ in content.EVIDENCE_LADDER], key="ev_type",
             help="Choose based on HOW you learned it. Higher on the list = stronger = more "
                  "credits. Be honest: a hallway 'sounds good' is an opinion, not behavior.")
         source = st.text_input(
-            "Source", placeholder="e.g., Interview with 3 coffee-shop owners",
+            "Source", key="ev_src", placeholder="e.g., Interview with 3 coffee-shop owners",
             help="Where the evidence came from — who, how many, and when.")
+        justification = st.text_input(
+            "Why is this that strength? (behavior vs. opinion)", key="ev_just",
+            placeholder="They physically pre-paid a $20 deposit — that's an action, not a "
+                        "stated intention.",
+            help="Required. In one line, justify the strength you picked. Naming what the "
+                 "customer DID (vs. said) is how you learn to tell strong evidence from weak.")
+        strength = content.EVIDENCE_LADDER_MAP.get(etype, 0)
+        st.caption(f"Selected strength: **{strength}/10** → "
+                   f"{'behavioral (what they did)' if strength >= 6 else 'opinion/intention (what they said)' if strength <= 2 else 'mid-ladder'}")
+
+        # Live misclassification nudge — compares your wording to the strength you chose.
+        flags = logic.evidence_flags(description, source, strength) if description else []
+        for f in flags:
+            st.warning("🔎 " + f)
+
         if assums:
             assum_id = st.selectbox(
                 "Related assumption (optional)",
-                [None] + [a["id"] for a in assums],
+                [None] + [a["id"] for a in assums], key="ev_assum",
                 format_func=lambda i: "—" if i is None else next(a["text"] for a in assums if a["id"] == i),
                 help="Link this evidence to the assumption it supports or challenges.")
         else:
             assum_id = None
-        if st.form_submit_button(
-                "Log evidence",
-                help="Records the evidence and pays you credits equal to its strength.") and description:
-            award, strength = logic.log_evidence_and_award(
-                team["id"], description, etype, source, assum_id)
-            st.success(f"Logged. Strength {strength}/10 → earned {award} Evidence Credits.")
+
+        can_log = bool(description.strip()) and bool(justification.strip())
+        if not can_log:
+            st.caption("Enter a one-line learning **and** a justification to log.")
+        if st.button("Log evidence", type="primary", disabled=not can_log,
+                     help="Records the evidence and pays you credits equal to its strength."):
+            award, strn = logic.log_evidence_and_award(
+                team["id"], description, etype, source, assum_id, justification)
+            msg = f"Logged. Strength {strn}/10 → earned {award} Evidence Credits."
+            if flags:
+                st.warning(msg + " (Heads up: it was flagged for a possible strength mismatch — "
+                                  "your instructor can see the flag too.)")
+            else:
+                st.success(msg)
+            for k in ("ev_desc", "ev_src", "ev_just"):
+                st.session_state.pop(k, None)
             st.rerun()
 
     st.divider()
     esum = logic.evidence_summary(team["id"])
-    c1, c2, c3, c4 = st.columns(4)
+    ev = db.list_evidence(team["id"])
+    flagged = sum(1 for e in ev
+                  if logic.evidence_flags(e["description"], e["source"], e["strength"]))
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Items", esum["count"], help="Total pieces of evidence logged.")
     c2.metric("Avg strength", esum["avg_strength"],
               help="Average strength of your evidence. Aim to raise this over time.")
     c3.metric("Behavioral", esum["behavioral"], help="Evidence of strength 6+ (what people did).")
     c4.metric("Opinion-only", esum["opinion"], help="Weak evidence of strength ≤2 (what people said).")
+    c5.metric("⚠️ Flagged", flagged,
+              help="Items whose wording may not match the strength you chose. Open the list "
+                   "below to review and re-log if needed.")
 
-    ev = db.list_evidence(team["id"])
     if ev:
-        st.dataframe(
-            [{"When": e["created_at"], "Learning": e["description"], "Type": e["evidence_type"],
-              "Strength": e["strength"], "Credits": e["credits_award"], "Source": e["source"]}
-             for e in ev],
-            use_container_width=True, hide_index=True,
-        )
+        st.write("### Your evidence")
+        for e in ev:
+            efl = logic.evidence_flags(e["description"], e["source"], e["strength"])
+            icon = "⚠️" if efl else "•"
+            with st.expander(f"{icon} [{e['strength']}/10] {e['description'][:70]}"):
+                st.write(f"**Type:** {e['evidence_type']}  ·  **Credits:** {e['credits_award']}")
+                st.write(f"**Source:** {e['source'] or '—'}")
+                if e.get("justification"):
+                    st.write(f"**Why this strength:** {e['justification']}")
+                for f in efl:
+                    st.warning("🔎 " + f)
 
 
 # --------------------------------------------------------------------------- #

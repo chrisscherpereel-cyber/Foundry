@@ -305,6 +305,17 @@ CREATE TABLE IF NOT EXISTS skill_xp (
     PRIMARY KEY (team_id, skill_key),
     FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS commitments (
+    team_id      INTEGER NOT NULL,
+    round        INTEGER NOT NULL,
+    committed    INTEGER DEFAULT 0,     -- 1 = team has locked in this round's work
+    committed_at TEXT,                  -- ISO datetime the team committed
+    due_at       TEXT,                  -- ISO decision deadline captured at commit time
+    snapshot     TEXT,                  -- JSON snapshot of the checklist at commit time
+    PRIMARY KEY (team_id, round),
+    FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
+);
 """
 
 
@@ -327,6 +338,11 @@ def init_db():
         _ensure_column(conn, "teams", "spent_train", "REAL DEFAULT 0")
         _ensure_column(conn, "teams", "spent_other", "REAL DEFAULT 0")
         _ensure_column(conn, "hires", "manage_hours", "REAL DEFAULT 0")
+        # Evidence: teams justify why a piece of evidence is the strength they chose.
+        _ensure_column(conn, "evidence", "justification", "TEXT")
+        # Experiments: calibration — the team's prediction + confidence before results.
+        _ensure_column(conn, "experiments", "predicted_outcome", "TEXT")
+        _ensure_column(conn, "experiments", "confidence", "INTEGER")
         # Seed default settings once.
         cur = conn.execute("SELECT value FROM settings WHERE key='current_round'")
         if cur.fetchone() is None:
@@ -649,17 +665,19 @@ def delete_assumption(assum_id):
 # --------------------------------------------------------------------------- #
 def add_experiment(team_id, assumption_id, card_type, cost_money, cost_time,
                    cost_credits, evidence_strength, hypothesis, metric,
-                   success_threshold, failure_threshold, decision_rule):
+                   success_threshold, failure_threshold, decision_rule,
+                   predicted_outcome=None, confidence=None):
     conn = get_conn()
     try:
         cur = conn.execute(
             """INSERT INTO experiments(team_id, assumption_id, card_type, cost_money,
                 cost_time, cost_credits, evidence_strength, hypothesis, metric,
-                success_threshold, failure_threshold, decision_rule, outcome, created_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?, 'Designed', ?)""",
+                success_threshold, failure_threshold, decision_rule,
+                predicted_outcome, confidence, outcome, created_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'Designed', ?)""",
             (team_id, assumption_id, card_type, cost_money, cost_time, cost_credits,
              evidence_strength, hypothesis, metric, success_threshold,
-             failure_threshold, decision_rule, now()),
+             failure_threshold, decision_rule, predicted_outcome, confidence, now()),
         )
         conn.commit()
         return cur.lastrowid
@@ -695,15 +713,16 @@ def update_experiment(exp_id, **fields):
 # Evidence ledger
 # --------------------------------------------------------------------------- #
 def add_evidence(team_id, description, evidence_type, strength, source,
-                 assumption_id=None, credits_award=0):
+                 assumption_id=None, credits_award=0, justification=None):
     conn = get_conn()
     try:
         conn.execute(
             """INSERT INTO evidence(team_id, description, evidence_type, strength,
-                                    source, assumption_id, credits_award, created_at)
-               VALUES(?,?,?,?,?,?,?,?)""",
+                                    source, assumption_id, credits_award,
+                                    justification, created_at)
+               VALUES(?,?,?,?,?,?,?,?,?)""",
             (team_id, description, evidence_type, strength, source,
-             assumption_id, credits_award, now()),
+             assumption_id, credits_award, justification, now()),
         )
         conn.commit()
     finally:
@@ -1327,5 +1346,54 @@ def remove_hire(hire_id):
     try:
         conn.execute("DELETE FROM hires WHERE id=?", (hire_id,))
         conn.commit()
+    finally:
+        conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# Round commitments — a team locks in a round's work; can withdraw before the
+# decision due date. The snapshot records what was complete at commit time.
+# --------------------------------------------------------------------------- #
+def get_commitment(team_id, round_no):
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM commitments WHERE team_id=? AND round=?",
+            (team_id, round_no),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def set_commitment(team_id, round_no, committed, due_at=None, snapshot=None):
+    """Insert or update a team's commitment for a round."""
+    conn = get_conn()
+    try:
+        conn.execute(
+            """INSERT INTO commitments(team_id, round, committed, committed_at, due_at, snapshot)
+               VALUES(?,?,?,?,?,?)
+               ON CONFLICT(team_id, round) DO UPDATE SET
+                 committed=excluded.committed,
+                 committed_at=excluded.committed_at,
+                 due_at=excluded.due_at,
+                 snapshot=excluded.snapshot""",
+            (team_id, round_no, 1 if committed else 0,
+             now() if committed else None, due_at, snapshot),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_commitments(round_no=None):
+    conn = get_conn()
+    try:
+        if round_no is None:
+            rows = conn.execute("SELECT * FROM commitments").fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM commitments WHERE round=?", (round_no,)).fetchall()
+        return [dict(r) for r in rows]
     finally:
         conn.close()

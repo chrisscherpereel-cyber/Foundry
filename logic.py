@@ -854,6 +854,100 @@ def next_scheduled_advance():
 
 
 # --------------------------------------------------------------------------- #
+# Decision deadlines & round commitments
+#   A round's decisions are due when the NEXT round begins (its scheduled advance
+#   time). If that time isn't set, the deadline is "unspecified" and the round
+#   never auto-locks — the Director decides when to move on.
+# --------------------------------------------------------------------------- #
+def _aware(dt):
+    if dt is not None and dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def decision_due_at(rnd):
+    """ISO text of when round `rnd`'s decisions are due, or None if unspecified.
+
+    Uses the start time of the next round (round rnd+1's advance_at)."""
+    for row in get_schedule():
+        if row["round"] == rnd + 1:
+            return row["advance_at"]
+    return None
+
+
+def decision_due_dt(rnd):
+    return _aware(_parse_dt(decision_due_at(rnd)))
+
+
+def deadline_status(rnd):
+    """Human-friendly deadline info for a round.
+
+    Returns a dict: {set: bool, due_at: iso|None, due_text: str, passed: bool,
+    remaining: str}."""
+    due = decision_due_dt(rnd)
+    if due is None:
+        return {"set": False, "due_at": None,
+                "due_text": "No deadline set — decisions stay open until your instructor "
+                            "advances the round.",
+                "passed": False, "remaining": ""}
+    now = datetime.now(timezone.utc)
+    passed = due <= now
+    if passed:
+        remaining = "past due"
+    else:
+        delta = due - now
+        days = delta.days
+        hours = delta.seconds // 3600
+        mins = (delta.seconds % 3600) // 60
+        remaining = (f"{days}d {hours}h left" if days else
+                     (f"{hours}h {mins}m left" if hours else f"{mins}m left"))
+    return {"set": True, "due_at": decision_due_at(rnd),
+            "due_text": due.astimezone().strftime("%a %b %d, %Y at %I:%M %p"),
+            "passed": passed, "remaining": remaining}
+
+
+def commitment_snapshot(team_id, rnd):
+    """A compact record of what is / isn't done for this round, for scoring."""
+    cl = round_checklist(team_id, rnd)
+    items = cl["decisions"] + cl["questions"] + cl["carried"]
+    done = sum(1 for i in items if i["done"])
+    return {"total": len(items), "done": done,
+            "labels_done": [i.get("label") for i in items if i["done"]],
+            "labels_open": [i.get("label") for i in items if not i["done"]]}
+
+
+def commitment_state(team_id, rnd):
+    """Full commit state for a team+round: committed?, locked (past due)?, snapshot."""
+    row = db.get_commitment(team_id, rnd)
+    ds = deadline_status(rnd)
+    committed = bool(row and row["committed"])
+    # Once the deadline passes, a team can no longer change its commitment.
+    locked = ds["set"] and ds["passed"]
+    return {"committed": committed, "locked": locked,
+            "committed_at": (row or {}).get("committed_at"),
+            "deadline": ds}
+
+
+def commit_round(team_id, rnd):
+    """Team locks in this round's work. No-op if the deadline has passed already."""
+    st = commitment_state(team_id, rnd)
+    if st["locked"]:
+        return False, "The deadline has passed — this round is locked."
+    snap = commitment_snapshot(team_id, rnd)
+    db.set_commitment(team_id, rnd, True, decision_due_at(rnd), json.dumps(snap))
+    return True, "Committed."
+
+
+def decommit_round(team_id, rnd):
+    """Team withdraws its commitment to keep editing — only before the deadline."""
+    st = commitment_state(team_id, rnd)
+    if st["locked"]:
+        return False, "The deadline has passed — you can no longer withdraw."
+    db.set_commitment(team_id, rnd, False, decision_due_at(rnd), None)
+    return True, "Commitment withdrawn — you can keep editing."
+
+
+# --------------------------------------------------------------------------- #
 # Evidence economy
 # --------------------------------------------------------------------------- #
 def credits_for_evidence(strength):
@@ -861,8 +955,63 @@ def credits_for_evidence(strength):
     return round(strength * content.CREDITS_PER_STRENGTH, 1)
 
 
+# Language cues used to sanity-check how a team rated a piece of evidence.
+# Behavior beats opinion: the ladder pays for what customers DID, not what they SAID.
+_OPINION_CUES = [
+    "would", "could", "might", "may ", "think", "thinks", "thought", "believe",
+    "like the idea", "love the idea", "likes it", "loved it", "interested",
+    "sounds ", "seems ", "probably", "maybe", "i'd", "they'd", "we'd",
+    "would pay", "would buy", "would use", "would try", "plan to", "planning to",
+    "intend", "intention", "hypothetical", "in theory", "cool", "nice idea",
+    "great idea", "said they", "told us they", "wants ", "want to", "hope",
+]
+_BEHAVIOR_CUES = [
+    "paid", "pay us", "bought", "purchase", "purchased", "signed", "sign-up",
+    "signed up", "preorder", "pre-order", "pre-ordered", "preordered", "deposit",
+    "subscribed", "subscription", "returned", "reordered", "used it", "trial",
+    "trialed", "downloaded", "installed", "committed", "letter of intent", "loi",
+    "invoice", "wired", "venmo", "credit card", "put down", "gave us money",
+]
+
+
+def _has_cue(text, cues):
+    t = (text or "").lower()
+    return any(c in t for c in cues)
+
+
+def evidence_flags(description, source, strength):
+    """Heuristic misclassification check comparing the WORDS to the claimed strength.
+
+    Returns a list of gentle warning strings (empty if nothing looks off). The goal
+    is to make teams practice telling behavior from opinion — the core skill — not to
+    block them."""
+    flags = []
+    text = f"{description or ''} {source or ''}"
+    opinion = _has_cue(text, _OPINION_CUES)
+    behavior = _has_cue(text, _BEHAVIOR_CUES)
+    # Claimed as behavioral/committal but the wording reads like a stated intention.
+    if strength >= 6 and opinion and not behavior:
+        flags.append(
+            "This reads like something a customer **said** or **would** do, not something "
+            f"they actually did — behavioral evidence (strength {strength}) usually describes "
+            "an action taken (paid, signed, pre-ordered, used). Double-check the rating, or "
+            "add what they physically did.")
+    # A hypothetical/intention rating is fine, but nudge toward stronger tests.
+    if strength <= 2 and behavior and not opinion:
+        flags.append(
+            "This describes a real action, which is usually **stronger** than a strength-"
+            f"{strength} opinion — you may be under-crediting it. Re-check the ladder.")
+    # High strength claimed with no concrete action words at all.
+    if strength >= 8 and not behavior:
+        flags.append(
+            f"Strength {strength} is near the top of the ladder (a binding commitment). Make "
+            "sure the description names the concrete commitment (a signed LOI, a payment, a "
+            "paid trial) — reviewers and your instructor will look for it.")
+    return flags
+
+
 def log_evidence_and_award(team_id, description, evidence_type, source,
-                           assumption_id=None):
+                           assumption_id=None, justification=None):
     """Add evidence to the ledger and pay Evidence Credits for it.
 
     Behavioral evidence is worth more, so credits scale with ladder strength.
@@ -871,7 +1020,7 @@ def log_evidence_and_award(team_id, description, evidence_type, source,
     strength = content.EVIDENCE_LADDER_MAP.get(evidence_type, 0)
     award = credits_for_evidence(strength)
     db.add_evidence(team_id, description, evidence_type, strength, source,
-                    assumption_id, award)
+                    assumption_id, award, justification)
     if award > 0:
         db.adjust_resources(
             team_id, credits=award, kind="evidence",
@@ -884,9 +1033,12 @@ def log_evidence_and_award(team_id, description, evidence_type, source,
 # Experiment purchasing
 # --------------------------------------------------------------------------- #
 def purchase_experiment(team_id, card, assumption_id, hypothesis, metric,
-                        success_threshold, failure_threshold, decision_rule):
+                        success_threshold, failure_threshold, decision_rule,
+                        predicted_outcome=None, confidence=None):
     """Charge the team and record a designed experiment.
 
+    Captures the team's PREDICTION and confidence up front so we can later compare
+    forecast vs. result — a calibration loop that builds entrepreneurial judgment.
     Returns (ok, message, experiment_id|None).
     """
     ok, msg = db.adjust_resources(
@@ -903,6 +1055,7 @@ def purchase_experiment(team_id, card, assumption_id, hypothesis, metric,
         team_id, assumption_id, card["name"], card["money"], card["hours"],
         card["credits"], card["strength"], hypothesis, metric,
         success_threshold, failure_threshold, decision_rule,
+        predicted_outcome=predicted_outcome, confidence=confidence,
     )
     _add_usage(team_id, "spent_build", card["hours"])
     return True, "Experiment purchased and designed.", exp_id
@@ -1165,6 +1318,36 @@ def experiment_efficiency(team_id):
     }
 
 
+# ---- Calibration: did the team's forecasts match reality? ------------------ #
+def prediction_correct(exp):
+    """Whether a resolved experiment's outcome matched the team's prediction.
+    Returns True/False, or None if not comparable (no prediction or not resolved)."""
+    pred = (exp.get("predicted_outcome") or "").strip()
+    actual = exp.get("outcome")
+    if not pred or actual not in ("Supported", "Refuted", "Inconclusive"):
+        return None
+    return pred == actual
+
+
+def calibration_summary(team_id):
+    """Compare the team's up-front predictions with what actually happened.
+
+    Overconfidence gap = average stated confidence − actual hit-rate. Positive means
+    the team was more sure than it should have been — the lesson the loop teaches."""
+    exps = db.list_experiments(team_id)
+    scored = [e for e in exps if prediction_correct(e) is not None
+              and e.get("confidence") is not None]
+    if not scored:
+        return {"n": 0, "correct": 0, "hit_rate": None, "avg_confidence": None,
+                "overconfidence_gap": None}
+    correct = sum(1 for e in scored if prediction_correct(e))
+    hit = 100.0 * correct / len(scored)
+    avg_conf = sum(float(e["confidence"]) for e in scored) / len(scored)
+    return {"n": len(scored), "correct": correct, "hit_rate": round(hit, 0),
+            "avg_confidence": round(avg_conf, 0),
+            "overconfidence_gap": round(avg_conf - hit, 0)}
+
+
 # --------------------------------------------------------------------------- #
 # Auto-Director (autopilot)
 #
@@ -1211,6 +1394,136 @@ def get_score_weights():
 def set_score_weights(weights):
     clean = {dim: round(float(weights.get(dim, 1.0)), 2) for dim in content.DIMENSION_NAMES}
     db.set_setting("score_weights", json.dumps(clean))
+
+
+# --------------------------------------------------------------------------- #
+# Round score (0–100) — a single grade for the work a team committed this round.
+#   Four merit components (each 0–100), blended by Director-tunable weights:
+#     • Commitment  — how much of the round's required work is complete.
+#     • Evidence    — strength/quality of the evidence gathered.
+#     • Coherence   — business-model + value-proposition coherence.
+#     • Concepts    — this round's concept-checks answered.
+#   A risk penalty subtracts for important, still-untested assumptions.
+#   A strictness dial then stretches (strict) or lifts (lenient) the result.
+# --------------------------------------------------------------------------- #
+ROUND_SCORE_COMPONENTS = ["commitment", "evidence", "coherence", "concepts"]
+DEFAULT_ROUND_SCORE_WEIGHTS = {"commitment": 40, "evidence": 25,
+                               "coherence": 20, "concepts": 15}
+RISK_PENALTY_PER_ITEM = 5     # points lost per important untested assumption
+RISK_PENALTY_CAP = 25
+
+
+def default_round_score_config():
+    return {"weights": dict(DEFAULT_ROUND_SCORE_WEIGHTS), "strictness": 50}
+
+
+def get_round_score_config():
+    """Director's round-score settings: component weights (0–100) + strictness (0–100)."""
+    cfg = default_round_score_config()
+    raw = db.get_setting("round_score_config")
+    if raw:
+        try:
+            saved = json.loads(raw)
+            for k in cfg["weights"]:
+                if k in saved.get("weights", {}):
+                    cfg["weights"][k] = float(saved["weights"][k])
+            if "strictness" in saved:
+                cfg["strictness"] = float(saved["strictness"])
+        except (ValueError, TypeError):
+            pass
+    return cfg
+
+
+def set_round_score_config(weights, strictness):
+    cfg = {"weights": {k: round(float(weights.get(k, DEFAULT_ROUND_SCORE_WEIGHTS[k])), 1)
+                       for k in ROUND_SCORE_COMPONENTS},
+           "strictness": round(float(strictness), 1)}
+    db.set_setting("round_score_config", json.dumps(cfg))
+
+
+def _strictness_gamma(strictness):
+    """Map a 0–100 strictness dial to a gamma exponent for the scoring curve.
+
+    50 = neutral (gamma 1.0). Above 50 makes high scores harder to reach
+    (gamma > 1); below 50 is more forgiving (gamma < 1)."""
+    import math
+    s = max(0.0, min(100.0, float(strictness)))
+    return math.exp((s - 50.0) / 50.0 * 0.9)   # ~0.41 (lenient) .. 1.0 .. 2.46 (strict)
+
+
+def round_score(team_id, rnd, config=None):
+    """Return a 0–100 round score with its component breakdown.
+
+    Scores the committed snapshot if the team has committed; otherwise the team's
+    current state. The result dict powers both the Director dashboard and any
+    feedback email."""
+    cfg = config or get_round_score_config()
+    weights = cfg["weights"]
+
+    # --- Commitment completion (from committed snapshot if present) ----------
+    cstate = commitment_state(team_id, rnd)
+    row = db.get_commitment(team_id, rnd)
+    snap = None
+    if cstate["committed"] and row and row.get("snapshot"):
+        try:
+            snap = json.loads(row["snapshot"])
+        except (ValueError, TypeError):
+            snap = None
+    if snap is None:
+        snap = commitment_snapshot(team_id, rnd)
+    commitment = 100.0 * (snap["done"] / snap["total"]) if snap["total"] else 100.0
+
+    # --- Evidence & coherence (from the heuristic dashboard scores) ----------
+    raw = _raw_scores(team_id)
+    evidence = _clamp100(raw.get("Evidence Strength", 0))
+    coherence = _clamp100(0.5 * raw.get("Business-Model Coherence", 0)
+                          + 0.5 * raw.get("Value Proposition Fit", 0))
+
+    # --- Concept coverage for this round -------------------------------------
+    cp = concept_progress(team_id, rnd)
+    concepts = 100.0 * (sum(1 for c in cp if c["done"]) / len(cp)) if cp else 100.0
+
+    comps = {"commitment": commitment, "evidence": evidence,
+             "coherence": coherence, "concepts": concepts}
+
+    # --- Weighted blend -------------------------------------------------------
+    wsum = sum(weights.get(k, 0) for k in ROUND_SCORE_COMPONENTS) or 1.0
+    base = sum(comps[k] * weights.get(k, 0) for k in ROUND_SCORE_COMPONENTS) / wsum
+
+    # --- Strictness curve -----------------------------------------------------
+    gamma = _strictness_gamma(cfg["strictness"])
+    curved = 100.0 * (max(0.0, base) / 100.0) ** gamma
+
+    # --- Risk penalty ---------------------------------------------------------
+    exposed = len(assumption_risk_report(team_id)["exposed"])
+    penalty = min(RISK_PENALTY_CAP, exposed * RISK_PENALTY_PER_ITEM)
+
+    final = max(0.0, min(100.0, curved - penalty))
+    return {
+        "components": {k: round(comps[k], 1) for k in ROUND_SCORE_COMPONENTS},
+        "weights": {k: weights.get(k, 0) for k in ROUND_SCORE_COMPONENTS},
+        "base": round(base, 1),
+        "curved": round(curved, 1),
+        "penalty": penalty,
+        "exposed_assumptions": exposed,
+        "committed": cstate["committed"],
+        "strictness": cfg["strictness"],
+        "gamma": round(gamma, 3),
+        "score": round(final, 1),
+        "grade": round_score_band(final),
+    }
+
+
+def round_score_band(score):
+    if score >= 90:
+        return "Exceptional"
+    if score >= 75:
+        return "Strong"
+    if score >= 60:
+        return "Solid"
+    if score >= 45:
+        return "Developing"
+    return "Needs work"
 
 
 def _raw_scores(team_id):

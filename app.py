@@ -148,13 +148,17 @@ STUDENT_PAGES = {
 
 
 def _make_student_label(team):
-    """Sidebar labels: lock/reference state + round tag + Inbox unread badge."""
+    """Sidebar labels: lock/reference state + round tag + Inbox unread + commit badge."""
     unread = db.unread_count(team["id"])
     rnd = db.current_round()
+    committed = logic.commitment_state(team["id"], rnd)["committed"]
 
     def label(page):
         if page == "Inbox":
             return f"Inbox 🔵{unread}" if unread else "Inbox"
+        if page == "Round Briefing":
+            # Surface commit status right where the commit control lives.
+            return "Round Briefing ✅" if committed else "Round Briefing ⚠️"
         state = logic.tool_state(page, rnd, team["id"])
         if state == "locked":
             return f"🔒 {page} · R{logic.page_unlock_round(page)}"
@@ -163,6 +167,28 @@ def _make_student_label(team):
         return page
 
     return label
+
+
+def _sidebar_commit_status(team):
+    """A prominent commit/deadline banner in the team sidebar."""
+    rnd = db.current_round()
+    state = logic.commitment_state(team["id"], rnd)
+    ds = state["deadline"]
+    if state["committed"]:
+        if state["locked"]:
+            st.success(f"✅ Round {rnd} committed · locked")
+        else:
+            st.success(f"✅ Round {rnd} committed")
+            st.caption("You can withdraw before the deadline (Round Briefing).")
+    else:
+        if state["locked"]:
+            st.error(f"🔒 Round {rnd} closed — not committed")
+        elif ds["set"]:
+            st.warning(f"⚠️ Round {rnd} not committed · due in {ds['remaining']}")
+            st.caption("Commit on the Round Briefing page.")
+        else:
+            st.warning(f"⚠️ Round {rnd} not committed")
+            st.caption("Commit on the Round Briefing page (no deadline set).")
 
 
 def student_shell():
@@ -177,9 +203,11 @@ def student_shell():
         st.header(f"🎓 {team['name']}")
         st.caption(f"Round {db.current_round()} · {team['stage']}")
         st.metric("Credits", f"{team['evidence_credits']:.1f}")
+        _sidebar_commit_status(team)
         page = st.radio("Go to", list(STUDENT_PAGES.keys()),
                         format_func=_make_student_label(team))
-        st.caption("🔒 locked (opens later) · 👁️ reference-only this round · others are active.")
+        st.caption("🔒 locked (opens later) · 👁️ reference-only this round · others are active. "
+                   "Round Briefing ✅ = committed, ⚠️ = not yet.")
         with st.expander("Rotating team roles"):
             for role, desc in content.TEAM_ROLES:
                 st.caption(f"**{role}** — {desc}")
@@ -203,6 +231,7 @@ INSTRUCTOR_PAGES = {
     "VP Auction": vi.vp_auction,
     "Pivot Committee": vi.pivot_committee,
     "Dashboard Scoring": vi.scoring,
+    "Round Scores": vi.round_scores,
 }
 
 
