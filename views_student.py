@@ -157,10 +157,81 @@ def _round_gate(page, team):
     return editable
 
 
-def _ai_check_notice():
-    """Reusable reminder wherever generative AI is likely to be used."""
-    with st.expander("🤖 Using generative AI here? Run the AUDIT check first"):
+def _ai_quick_log(team, default_area=None, key="page", show_full_audit=True):
+    """A fast, two-field AI logger: capture the claim + how you'll check it, with
+    structured picks and an optional deep AUDIT. Reused in-context on tool pages and
+    on the AI Assist Log page."""
+    if logic.editing_locked(team["id"]):
+        _committed_banner(team)
+        return
+    assums = db.list_assumptions(team["id"])
+    with st.form(f"ai_quick_{key}", clear_on_submit=True):
+        area_default = default_area if default_area in content.AI_TOOL_AREAS else None
+        if area_default:
+            tool_area = area_default
+            st.caption(f"Logging AI use in **{tool_area}** · Round {db.current_round()}")
+        else:
+            tool_area = st.selectbox("Where did you use AI?", content.AI_TOOL_AREAS,
+                                     key=f"aq_area_{key}")
+        claim = st.text_input("① The AI's claim (required)", key=f"aq_claim_{key}",
+                              placeholder=content.AI_CLAIM_EXAMPLE)
+        cc1, cc2 = st.columns(2)
+        claim_type = cc1.selectbox("Claim type", content.AI_CLAIM_TYPES, key=f"aq_ct_{key}",
+                                   help="Is the AI stating a fact, predicting, or just opining?")
+        data_source = cc2.selectbox("Did it give a source?", content.AI_DATA_SOURCES,
+                                    key=f"aq_ds_{key}",
+                                    help="AI often invents sources — pick honestly.")
+        verify = st.text_input("② How will you check it? (required)", key=f"aq_v_{key}",
+                               placeholder=content.AI_VERIFY_EXAMPLE,
+                               help="Name a real-world test — asking customers, not the AI.")
+        link_id = None
+        if assums:
+            opts = [None] + [a["id"] for a in assums]
+            link_id = st.selectbox(
+                "Link to an assumption to auto-verify (optional)", opts, key=f"aq_link_{key}",
+                format_func=lambda i: "—" if i is None
+                else next(a["text"] for a in assums if a["id"] == i),
+                help="When the linked assumption is Supported/Refuted by a test, this AI log "
+                     "flips to Verified/Rejected automatically — no extra step.")
+        audit = {"A": "", "U": "", "D": "", "T": ""}
+        if show_full_audit:
+            with st.expander("Deepen the audit (optional A · U · D · T)"):
+                for letter, name, desc in content.AI_AUDIT_STEPS:
+                    if letter == "I":
+                        continue   # 'I' is the required verify field above
+                    audit[letter] = st.text_area(f"{letter} — {name}", help=desc,
+                                                  key=f"aq_audit_{letter}_{key}")
+        if st.form_submit_button("Log AI use", type="primary"):
+            if not claim.strip():
+                st.error("The AI's claim is required.")
+            elif not verify.strip():
+                st.error("The verification step is required — how will you check it against reality?")
+            else:
+                db.add_ai_log(team["id"], {
+                    "round": db.current_round(), "tool_area": tool_area, "prompt": "",
+                    "ai_output": claim, "verify_plan": verify, "audit_i": verify,
+                    "audit_a": audit["A"], "audit_u": audit["U"], "audit_d": audit["D"],
+                    "audit_t": audit["T"], "claim_type": claim_type, "data_source": data_source,
+                    "assumption_id": link_id, "status": "Unverified",
+                })
+                st.success("Logged. It stays Unverified until your test settles it — then it "
+                           "auto-verifies if you linked an assumption.")
+                st.rerun()
+
+
+def _ai_check_notice(team=None, tool_area=None):
+    """Reusable reminder + in-context quick logger wherever AI is likely to be used."""
+    unv = logic.ai_unverified_count(team["id"]) if team else 0
+    title = "🤖 Used AI here? Log & check it"
+    if unv:
+        title += f" · ⏳ {unv} unverified"
+    with st.expander(title):
         st.markdown(content.AI_PROTOCOL_SUMMARY)
+        if team is not None:
+            st.divider()
+            st.caption("Quick-log it right here — two fields is enough:")
+            _ai_quick_log(team, default_area=tool_area, key=f"ctx_{tool_area or 'x'}",
+                          show_full_audit=False)
 
 
 def _mini_pivot_section(team):
@@ -221,6 +292,17 @@ def _commitment_panel(team, cur, all_items, done_n, complete):
         st.warning("🗓️ **No deadline is set for this round.** Your instructor hasn't scheduled "
                    "an advance time, so decisions stay open until they move the simulation "
                    "forward. You can still commit to signal you're done.")
+
+    # End-of-round nudges: journal + any unverified AI.
+    _unv = logic.ai_unverified_count(team["id"])
+    _journaled = {r["student_name"] for r in db.list_reflections(team["id"]) if r["round"] == cur}
+    _nudges = []
+    if not _journaled:
+        _nudges.append("no **Decision Journal** entries yet this round")
+    if _unv:
+        _nudges.append(f"**{_unv} AI use(s) unverified**")
+    if _nudges:
+        st.caption("Before you commit: " + "; ".join(_nudges) + ".")
 
     # What's still open (must be decided) vs done.
     open_items = [p for p in all_items if not p["done"]]
@@ -1182,7 +1264,7 @@ def canvases(team):
             ("Environment Canvas", "The trends and forces surrounding the model (UNITE scan)."),
         ],
     )
-    _ai_check_notice()
+    _ai_check_notice(team, tool_area="Business Model")
 
     focuses = logic.canvas_focus_for_round(cur)   # list (a round may cover several)
     focus_names = [_CANVAS_DEFS[f][0] for f in focuses if f in _CANVAS_DEFS]
@@ -1388,6 +1470,7 @@ def experiments(team):
     )
     team = logic.sync_round_hours(_refresh_team(team["id"]))
     _resource_bar(team)
+    _ai_check_notice(team, tool_area="Experiment design")
 
     assums = db.list_assumptions(team["id"])
     if not assums:
@@ -1928,72 +2011,98 @@ def pivots(team):
 # --------------------------------------------------------------------------- #
 def reflections(team):
     st.subheader("📝 Entrepreneurial Decision Journal")
+    cur = db.current_round()
+    topics = logic.topics_for_round(cur)
+    focus_key = topics[0]["key"] if topics else None
+    focus_q = content.journal_focus(focus_key)
     _guide(
-        "Each student keeps their own journal so learning is individual, not just the team's. "
-        "After each round, write a short entry: what you expected, what happened, and what you "
-        "personally contributed. These entries feed your individual grade and your end-of-term "
-        "Venture Defense, so write them for yourself even when the team disagrees.",
-        steps=[
-            "Enter your name and the round number.",
-            "Answer each reflection prompt honestly in a sentence or two.",
-            "Submit. Entries are saved and visible to the Director.",
-        ],
+        "Your own 2-minute journal — individual, so learning isn't just the team's. Three quick "
+        "prompts plus one that changes with this round's focus. It's pre-filled with what you did "
+        "this round so it's fast, and you can come back and edit your entry anytime.",
         terms=[
-            ("Decision journal", "Your personal record of decisions, evidence, and learning."),
-            ("My contribution", "What YOU specifically did or argued — this protects against "
-             "free-riding."),
+            ("Round focus", "One prompt tailored to what this round is about."),
+            ("My contribution", "What YOU specifically did — this protects against free-riding."),
         ],
     )
+
+    # Remember who's writing so they don't retype every round.
+    name = st.text_input("Your name", value=st.session_state.get("journal_name", ""),
+                         help="Remembered for this session so you don't retype it.")
+    if name:
+        st.session_state["journal_name"] = name
+
+    # Ground the reflection in what actually happened this round.
+    m = logic.learning_metrics(team["id"])
+    rs = logic.round_score(team["id"], cur)
+    st.caption(
+        f"📌 **This round so far** — behavioral evidence {m['behavioral']} · opinion {m['opinion']} "
+        f"· test coverage {m['test_coverage']*100:.0f}% · course corrections {m['pivots_evidence']} "
+        f"· round score {rs['score']:.0f}/100. Use these as a memory jog.")
+
+    # Close last round's loop: did you do what you said you would?
+    prev = db.get_reflection(team["id"], name, cur - 1) if name and cur > 1 else None
+    if prev and (prev.get("differently") or "").strip():
+        st.info(f"↩️ Last round you wrote you'd do differently: *“{prev['differently']}”* — did you?")
 
     if logic.editing_locked(team["id"]):
         _committed_banner(team)
     else:
-      with st.form("reflection_form", clear_on_submit=True):
-        name = st.text_input(
-            "Your name", help="Your own name — each journal entry is individual.")
-        rnd = st.number_input(
-            "Round", min_value=1, max_value=logic.total_rounds(), value=db.current_round(),
-            help="Which simulation round this reflection is about.")
-        expected = st.text_area(
-            "What did we expect?", help="Before the round, what did your team predict would happen?")
-        occurred = st.text_area(
-            "What occurred?", help="What actually happened, including any surprises?")
-        assumption = st.text_area(
-            "Which assumption shaped our decision?",
-            help="The key belief behind the choice your team made.")
-        overlooked = st.text_area(
-            "What evidence did we overlook?",
-            help="Looking back, what information did you miss or discount?")
-        differently = st.text_area(
-            "What would we do differently?", help="A concrete change for next time.")
-        contribution = st.text_area(
-            "What did I personally contribute?",
-            help="Your individual role in the decision — what you did, argued, or built.")
-        if st.form_submit_button("Submit reflection",
-                                 help="Save your individual journal entry for this round."):
-            if not name:
-                st.error("Name is required.")
-            else:
-                db.add_reflection(team["id"], {
-                    "student_name": name, "round": int(rnd), "expected": expected,
-                    "occurred": occurred, "assumption": assumption, "overlooked": overlooked,
-                    "differently": differently, "contribution": contribution,
-                })
-                st.success("Reflection submitted.")
-                st.rerun()
+        existing = db.get_reflection(team["id"], name, cur) if name else None
+        ex = existing or {}
+        if existing:
+            st.caption("✏️ Editing your existing entry for this round.")
+        with st.form("reflection_form", clear_on_submit=False):
+            vals = {}
+            for keyname, label, stem in content.JOURNAL_CORE:
+                vals[keyname] = st.text_area(label, value=ex.get(keyname, ""),
+                                             placeholder=stem, key=f"jr_{keyname}_{cur}")
+            focus_answer = st.text_area(f"🎯 {focus_q}", value=ex.get("focus_answer", ""),
+                                        key=f"jr_focus_{cur}",
+                                        help="This prompt changes with the round's topic.")
+            with st.expander("Add more (optional)"):
+                for keyname, label, stem in content.JOURNAL_OPTIONAL:
+                    vals[keyname] = st.text_area(label, value=ex.get(keyname, ""),
+                                                 placeholder=stem, key=f"jr_{keyname}_{cur}")
+            if st.form_submit_button("Save my entry", type="primary"):
+                if not name.strip():
+                    st.error("Enter your name first (top of page).")
+                elif not (vals["expected"].strip() and vals["occurred"].strip()
+                          and vals["differently"].strip()):
+                    st.error("The three core prompts are required — a sentence each is plenty.")
+                else:
+                    db.add_reflection(team["id"], {
+                        "student_name": name, "round": cur,
+                        "expected": vals["expected"], "occurred": vals["occurred"],
+                        "differently": vals["differently"],
+                        "assumption": vals.get("assumption", ""),
+                        "overlooked": vals.get("overlooked", ""),
+                        "contribution": vals.get("contribution", ""),
+                        "focus_prompt": focus_q, "focus_answer": focus_answer,
+                    })
+                    st.success("Saved. Come back to edit it anytime before the round advances.")
+                    st.rerun()
+
+    # Who on the team has journaled this round?
+    this_round = [r for r in db.list_reflections(team["id"]) if r["round"] == cur]
+    if this_round:
+        st.caption("✅ Journaled this round: " + ", ".join(sorted(
+            {r["student_name"] for r in this_round if r["student_name"]})))
 
     st.divider()
     refs = db.list_reflections(team["id"])
     if refs:
-        st.write(f"### {len(refs)} reflection(s) on record")
+        st.write(f"### {len(refs)} entry(ies) on record")
         for r in refs:
             with st.expander(f"{r['student_name']} · Round {r['round']} · {r['created_at']}"):
                 st.write(f"**Expected:** {r['expected']}")
                 st.write(f"**Occurred:** {r['occurred']}")
-                st.write(f"**Assumption:** {r['assumption']}")
-                st.write(f"**Overlooked:** {r['overlooked']}")
+                if (r.get('focus_prompt') or '').strip():
+                    st.write(f"**{r['focus_prompt']}** {r.get('focus_answer') or '—'}")
                 st.write(f"**Differently:** {r['differently']}")
-                st.write(f"**My contribution:** {r['contribution']}")
+                for lbl, col in (("Assumption", "assumption"), ("Overlooked", "overlooked"),
+                                 ("My contribution", "contribution")):
+                    if (r.get(col) or "").strip():
+                        st.write(f"**{lbl}:** {r[col]}")
 
 
 # --------------------------------------------------------------------------- #
@@ -2004,95 +2113,80 @@ def ai_assist(team):
     _guide(
         "You're expected to use generative AI every round — to draft canvases, brainstorm "
         "propositions, design experiments, and more. But fluent AI text is NOT evidence: it's "
-        "confident opinion until you verify it. Log each AI use here and run it through the "
-        "**AUDIT** check. An AI idea stays 'Unverified' (evidence strength 0) until a real-world "
-        "test moves it up the evidence ladder.",
+        "confident opinion until you verify it. Logging takes two fields — the AI's **claim** and "
+        "**how you'll check it**. Link the claim to an assumption and it **auto-verifies** when "
+        "your test settles. Only the checking is rewarded, not the usage.",
         steps=[
-            "Record the tool area, your prompt, and the AI's key output.",
-            "Work through AUDIT: Assumptions, Unsupported claims, Data/sources, Independent test.",
-            "Design the cheapest real test, run it (Experiment Marketplace), and log the evidence.",
-            "Come back and set status to Verified, Rejected, or Modified.",
+            "Quick-log the AI's claim and how you'll check it (two fields).",
+            "Link it to the assumption it relates to, so it auto-verifies when you test that.",
+            "Run the cheapest real test (Experiment Marketplace), then log the evidence.",
+            "The log flips to Verified/Rejected automatically — or set it with one tap.",
         ],
         terms=[
-            ("AUDIT", "Assumptions · Unsupported · Data/sources · Independent test · Translate."),
-            ("Unverified", "AI output not yet tested — treat as strength 0, mere opinion."),
-            ("Verified", "A real test supported it; now it's backed by ladder evidence."),
+            ("Claim", "What the AI actually asserted — treat it as opinion (strength 0) until tested."),
+            ("Check it", "The real-world test you'll run — ask customers, not the AI."),
+            ("Auto-verify", "A linked assumption that tests Supported/Refuted flips this log for you."),
         ],
     )
-    st.markdown(content.AI_PROTOCOL_SUMMARY)
+    with st.expander("What's the AUDIT check? (reference)"):
+        st.markdown(content.AI_PROTOCOL_SUMMARY)
+    # Auto-verify anything whose linked test has since resolved.
+    flipped = logic.sync_ai_logs(team["id"])
+    if flipped:
+        st.info(f"✅ {flipped} AI log(s) auto-updated because their linked test resolved.")
+
+    rate = logic.ai_verification_rate(team["id"])
+    unv = logic.ai_unverified_count(team["id"])
+    if rate is not None:
+        st.progress(rate, text=f"AI verification rate: {rate*100:.0f}% — this is what the score "
+                               "rewards (evaluating AI), not how much AI you use.")
+    if unv:
+        st.warning(f"⏳ **{unv} AI use(s) still unverified.** Link each to an assumption and run "
+                   "the test, or set its status once you've checked it.")
 
     st.divider()
-    if logic.editing_locked(team["id"]):
-        _committed_banner(team)
-    else:
-      with st.form("add_ai_log", clear_on_submit=True):
-        st.markdown("**Log a new AI-assisted contribution**")
-        c1, c2 = st.columns(2)
-        rnd = c1.number_input("Round", 1, logic.total_rounds(), db.current_round(),
-                              help="Which round you used AI in.")
-        tool_area = c2.selectbox("Where did you use AI?", content.AI_TOOL_AREAS,
-                                 help="Which part of the venture the AI helped with.")
-        prompt = st.text_area("Your prompt", help="What you asked the AI (paste or paraphrase).")
-        ai_output = st.text_area("① The AI's claim (required)",
-                                 help="The main idea/claim the AI produced. Logging AI here is "
-                                      "not about using it — it's about EVALUATING it.")
-        st.caption("AI output is confident opinion, not evidence, until you check it. Both the "
-                   "claim and how you'll verify it are required.")
-        st.markdown("**② AUDIT check** — how you'll verify the claim")
-        audit = {}
-        for letter, name, desc in content.AI_AUDIT_STEPS:
-            audit[letter] = st.text_area(f"{letter} — {name}", help=desc, key=f"audit_{letter}")
-        status = st.selectbox("Status", content.AI_STATUS_OPTIONS,
-                              help="Unverified until a real test supports it. Come back and set "
-                                   "Verified/Rejected/Modified after you check — that's what's rewarded.")
-        if st.form_submit_button("Log AI use", help="Save this AI contribution and its AUDIT."):
-            if not (ai_output or "").strip():
-                st.error("The AI's claim is required — what did the AI actually say?")
-            elif not (audit.get("I") or "").strip():
-                st.error("The verification step (I — Independent test) is required. How will you "
-                         "check this claim against reality? Logging AI you won't verify isn't allowed.")
-            else:
-                db.add_ai_log(team["id"], {
-                    "round": int(rnd), "tool_area": tool_area, "prompt": prompt,
-                    "ai_output": ai_output, "audit_a": audit["A"], "audit_u": audit["U"],
-                    "audit_d": audit["D"], "audit_i": audit["I"], "audit_t": audit["T"],
-                    "status": status,
-                })
-                st.success("AI use logged. Verify it with a real test, then set its status — "
-                           "verification is what earns credit, not usage.")
-                st.rerun()
+    st.write("### Log AI use — fast")
+    st.caption("Two fields is enough: the AI's **claim** and **how you'll check it**. Logging AI "
+               "is about *evaluating* it, not using it. Link a claim to an assumption and it "
+               "**auto-verifies** when your test settles.")
+    _ai_quick_log(team, key="ailog", show_full_audit=True)
 
     logs = db.list_ai_logs(team["id"])
     if logs:
-        unv = sum(1 for l in logs if l["status"] == "Unverified")
-        rate = logic.ai_verification_rate(team["id"])
         st.divider()
-        st.write(f"### AI log — {len(logs)} entries · {unv} unverified")
-        if rate is not None:
-            st.progress(rate, text=f"AI verification rate: {rate*100:.0f}% "
-                                    "(this is what the round score rewards — not how much AI you use)")
+        st.write(f"### Your AI log — {len(logs)} entries · {unv} unverified")
+        _locked = logic.editing_locked(team["id"])
+        assum_by_id = {a["id"]: a["text"] for a in db.list_assumptions(team["id"])}
+        _STATUS_BTN = [("✅ Verified", "Verified"), ("❌ Rejected", "Rejected"),
+                       ("✏️ Modified", "Modified"), ("⏳ Unverified", "Unverified")]
         for l in logs:
             icon = {"Verified": "✅", "Rejected": "❌", "Modified": "✏️"}.get(l["status"], "⏳")
-            with st.expander(f"{icon} R{l['round']} · {l['tool_area']} · {l['status']} · {l['created_at']}"):
-                st.write(f"**Prompt:** {l['prompt']}")
-                st.write(f"**AI output:** {l['ai_output']}")
-                st.markdown("**AUDIT**")
-                st.write(f"- **A** Assumptions: {l['audit_a'] or '—'}")
-                st.write(f"- **U** Unsupported: {l['audit_u'] or '—'}")
-                st.write(f"- **D** Data/sources: {l['audit_d'] or '—'}")
-                st.write(f"- **I** Independent test: {l['audit_i'] or '—'}")
-                st.write(f"- **T** Translate to evidence: {l['audit_t'] or '—'}")
-                _ailock = logic.editing_locked(team["id"])
-                new_status = st.selectbox(
-                    "Update status", content.AI_STATUS_OPTIONS,
-                    index=content.AI_STATUS_OPTIONS.index(l["status"]),
-                    key=f"aist_{l['id']}", disabled=_ailock,
-                    help="Set to Verified only after a real test supported the AI's claim.")
-                if not _ailock:
-                    cc1, cc2 = st.columns(2)
-                    if cc1.button("Save status", key=f"aisv_{l['id']}"):
-                        db.update_ai_log(l["id"], status=new_status)
-                        st.rerun()
-                    if cc2.button("Delete", key=f"aidl_{l['id']}"):
+            with st.expander(f"{icon} R{l['round']} · {l['tool_area']} · {l['status']}"):
+                st.write(f"**AI's claim:** {l['ai_output'] or '—'}")
+                meta = []
+                if l.get("claim_type"):
+                    meta.append(l["claim_type"])
+                if l.get("data_source"):
+                    meta.append(f"source: {l['data_source']}")
+                if meta:
+                    st.caption(" · ".join(meta))
+                st.write(f"**How to check it:** {l.get('verify_plan') or l.get('audit_i') or '—'}")
+                if l.get("assumption_id") and l["assumption_id"] in assum_by_id:
+                    st.caption(f"🔗 Linked to assumption: *{assum_by_id[l['assumption_id']]}* "
+                               "(auto-verifies when tested)")
+                extra = [(k, l.get(c)) for k, c in
+                         (("A", "audit_a"), ("U", "audit_u"), ("D", "audit_d"), ("T", "audit_t"))
+                         if (l.get(c) or "").strip()]
+                if extra:
+                    st.markdown("**Deeper audit:** " + " · ".join(f"**{k}** {v}" for k, v in extra))
+                if not _locked:
+                    st.caption("Set the outcome once you've checked it:")
+                    cols = st.columns(len(_STATUS_BTN) + 1)
+                    for i, (lbl, val) in enumerate(_STATUS_BTN):
+                        if cols[i].button(lbl, key=f"aibtn_{val}_{l['id']}",
+                                          disabled=(l["status"] == val)):
+                            db.update_ai_log(l["id"], status=val)
+                            st.rerun()
+                    if cols[-1].button("🗑️", key=f"aidl_{l['id']}", help="Delete this log"):
                         db.delete_ai_log(l["id"])
                         st.rerun()

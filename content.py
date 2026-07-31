@@ -1143,6 +1143,58 @@ AI_TOOL_AREAS = [
     "Experiment design", "Pricing / economics", "Pivot reasoning", "Investor narrative", "Other",
 ]
 
+# Structured, one-tap AUDIT picks — faster and more honest than free text.
+AI_CLAIM_TYPES = ["Fact (says it's true)", "Prediction (says it will happen)",
+                  "Opinion / suggestion"]
+AI_DATA_SOURCES = ["No source given", "Cited a source but I haven't checked it",
+                   "I checked the source myself"]
+
+# Worked examples shown beside the two required quick-log fields.
+AI_CLAIM_EXAMPLE = "e.g. 'Coffee shops will pay $49/mo for automated inventory forecasting.'"
+AI_VERIFY_EXAMPLE = ("e.g. 'Ask 5 real shop owners for a paid pre-order — not the AI — and see "
+                     "if ≥2 commit.'")
+
+# --------------------------------------------------------------------------- #
+# Decision Journal — a short, round-adaptive reflection. Three core prompts are
+# always asked; one focus prompt changes with the round's topic; the rest are
+# optional. Stems lower the blank-page cost.
+# --------------------------------------------------------------------------- #
+JOURNAL_CORE = [
+    ("expected", "What did you expect to happen this round?", "We expected that…"),
+    ("occurred", "What actually happened?", "What actually happened was…"),
+    ("differently", "What will you do differently next round?", "Next round we'll…"),
+]
+JOURNAL_OPTIONAL = [
+    ("assumption", "Which assumption most shaped your decision? (optional)",
+     "Our decision hinged on…"),
+    ("overlooked", "What evidence did you overlook or discount? (optional)",
+     "We may have ignored…"),
+    ("contribution", "What did YOU personally contribute? (optional)", "I personally…"),
+]
+JOURNAL_FOCUS_BY_TOPIC = {
+    "founder_formation": "How did your team's real skills and constraints shape your choices this round?",
+    "opportunity_framing": "Why did you pick this opportunity over the others you considered?",
+    "customer_discovery": "What surprised you most when you talked to real customers?",
+    "customer_evidence": "What did behavioral evidence tell you that opinions didn't?",
+    "value_creation": "Which customer pain or gain turned out to matter most — and how do you know?",
+    "value_prop_fit": "Where did your value proposition NOT fit the customer, and what will you change?",
+    "bmc_architecture": "Which business-model block is your weakest link right now, and why?",
+    "assumption_testing": "Which assumption, if false, would break your venture — and did you test it?",
+    "experiment_design": "Was your experiment cheap and decisive? What would make the next one sharper?",
+    "market_testing": "What did the market actually show you (uptake, price, channel)?",
+    "pivot_decisions": "Did the evidence say persevere or pivot — and did you listen?",
+    "business_economics": "Do your unit economics work yet? Which number are you least sure about?",
+    "scaling": "What has to be true for this to scale beyond your first customers?",
+    "investment_readiness": "If an investor asked for your single strongest piece of evidence, what would you show?",
+    "venture_market": "Across the whole venture, what's the transferable lesson you'll keep?",
+}
+JOURNAL_FOCUS_DEFAULT = "What did you learn this round that changes what you'll do next?"
+
+
+def journal_focus(topic_key):
+    return JOURNAL_FOCUS_BY_TOPIC.get(topic_key, JOURNAL_FOCUS_DEFAULT)
+
+
 AI_PROTOCOL_SUMMARY = (
     "**Generative AI is allowed every round — but AI output is not evidence.** Treat any AI "
     "suggestion as founder opinion (strength 0) until it passes the **AUDIT** check and you "

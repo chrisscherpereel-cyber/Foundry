@@ -1222,6 +1222,32 @@ def evidence_based_pivots(team_id):
             "total": mini + approved + refuted}
 
 
+def sync_ai_logs(team_id):
+    """Auto-verify AI logs whose linked test has resolved, so 'verification' is a real
+    action the team already takes, not extra paperwork.
+
+    A linked experiment/assumption that came back Supported verifies the AI's claim;
+    Refuted rejects it. Only touches logs still 'Unverified'. Returns count changed."""
+    exps = {e["id"]: e for e in db.list_experiments(team_id)}
+    assums = {a["id"]: a for a in db.list_assumptions(team_id)}
+    changed = 0
+    for l in db.list_ai_logs(team_id):
+        if l["status"] != "Unverified":
+            continue
+        outcome = None
+        if l.get("experiment_id") and l["experiment_id"] in exps:
+            outcome = exps[l["experiment_id"]]["outcome"]
+        elif l.get("assumption_id") and l["assumption_id"] in assums:
+            outcome = assums[l["assumption_id"]]["status"]
+        if outcome == "Supported":
+            db.update_ai_log(l["id"], status="Verified")
+            changed += 1
+        elif outcome == "Refuted":
+            db.update_ai_log(l["id"], status="Rejected")
+            changed += 1
+    return changed
+
+
 def ai_verification_rate(team_id):
     """Share of AI-assist logs the team actually EVALUATED (reached a decided status),
     rather than leaving as raw 'Unverified'. Rewards verification, not usage.
@@ -1232,6 +1258,10 @@ def ai_verification_rate(team_id):
         return None
     decided = sum(1 for l in logs if l["status"] in ("Verified", "Rejected", "Modified"))
     return decided / len(logs)
+
+
+def ai_unverified_count(team_id):
+    return sum(1 for l in db.list_ai_logs(team_id) if l["status"] == "Unverified")
 
 
 # --------------------------------------------------------------------------- #

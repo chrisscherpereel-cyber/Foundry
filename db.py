@@ -355,6 +355,16 @@ def init_db():
         # Pivots: lightweight "mini" course-corrections available from early rounds.
         _ensure_column(conn, "pivots", "kind", "TEXT DEFAULT 'formal'")
         _ensure_column(conn, "pivots", "round", "INTEGER")
+        # AI logs: faster structured capture + link an AI claim to a real test so it
+        # can auto-verify when that test resolves.
+        _ensure_column(conn, "ai_logs", "claim_type", "TEXT")     # fact | prediction | opinion
+        _ensure_column(conn, "ai_logs", "data_source", "TEXT")    # none | cited-unchecked | verified
+        _ensure_column(conn, "ai_logs", "verify_plan", "TEXT")    # how they'll check it
+        _ensure_column(conn, "ai_logs", "assumption_id", "INTEGER")
+        _ensure_column(conn, "ai_logs", "experiment_id", "INTEGER")
+        # Decision Journal: one round-adaptive focus question per entry.
+        _ensure_column(conn, "reflections", "focus_prompt", "TEXT")
+        _ensure_column(conn, "reflections", "focus_answer", "TEXT")
         # Seed default settings once.
         cur = conn.execute("SELECT value FROM settings WHERE key='current_round'")
         if cur.fetchone() is None:
@@ -844,19 +854,53 @@ def decide_pivot(pivot_id, status, note=""):
 # --------------------------------------------------------------------------- #
 # Reflections
 # --------------------------------------------------------------------------- #
+def _reflection_id(conn, team_id, student_name, round_no):
+    row = conn.execute(
+        "SELECT id FROM reflections WHERE team_id=? AND lower(student_name)=lower(?) AND round=?",
+        (team_id, student_name, round_no),
+    ).fetchone()
+    return row["id"] if row else None
+
+
 def add_reflection(team_id, data):
+    """Insert or UPDATE a student's journal entry for a round (one per student/round),
+    so returning to edit doesn't create duplicates."""
     conn = get_conn()
     try:
-        conn.execute(
-            """INSERT INTO reflections(team_id, student_name, round, expected, occurred,
-                assumption, overlooked, differently, contribution, created_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?)""",
-            (team_id, data.get("student_name", ""), data.get("round", 1),
-             data.get("expected", ""), data.get("occurred", ""),
-             data.get("assumption", ""), data.get("overlooked", ""),
-             data.get("differently", ""), data.get("contribution", ""), now()),
-        )
+        existing = _reflection_id(conn, team_id, data.get("student_name", ""),
+                                  data.get("round", 1))
+        vals = (data.get("expected", ""), data.get("occurred", ""),
+                data.get("assumption", ""), data.get("overlooked", ""),
+                data.get("differently", ""), data.get("contribution", ""),
+                data.get("focus_prompt", ""), data.get("focus_answer", ""))
+        if existing:
+            conn.execute(
+                """UPDATE reflections SET expected=?, occurred=?, assumption=?, overlooked=?,
+                    differently=?, contribution=?, focus_prompt=?, focus_answer=?, created_at=?
+                   WHERE id=?""",
+                (*vals, now(), existing),
+            )
+        else:
+            conn.execute(
+                """INSERT INTO reflections(team_id, student_name, round, expected, occurred,
+                    assumption, overlooked, differently, contribution, focus_prompt,
+                    focus_answer, created_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (team_id, data.get("student_name", ""), data.get("round", 1), *vals, now()),
+            )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def get_reflection(team_id, student_name, round_no):
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM reflections WHERE team_id=? AND lower(student_name)=lower(?) AND round=?",
+            (team_id, student_name, round_no),
+        ).fetchone()
+        return dict(row) if row else None
     finally:
         conn.close()
 
@@ -993,17 +1037,23 @@ def list_vp_results(team_id=None):
 def add_ai_log(team_id, data):
     conn = get_conn()
     try:
-        conn.execute(
+        cur = conn.execute(
             """INSERT INTO ai_logs(team_id, round, tool_area, prompt, ai_output,
-                audit_a, audit_u, audit_d, audit_i, audit_t, status, created_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                audit_a, audit_u, audit_d, audit_i, audit_t, status,
+                claim_type, data_source, verify_plan, assumption_id, experiment_id,
+                created_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (team_id, data.get("round", 1), data.get("tool_area", ""),
              data.get("prompt", ""), data.get("ai_output", ""),
              data.get("audit_a", ""), data.get("audit_u", ""), data.get("audit_d", ""),
              data.get("audit_i", ""), data.get("audit_t", ""),
-             data.get("status", "Unverified"), now()),
+             data.get("status", "Unverified"),
+             data.get("claim_type"), data.get("data_source"),
+             data.get("verify_plan", ""), data.get("assumption_id"),
+             data.get("experiment_id"), now()),
         )
         conn.commit()
+        return cur.lastrowid
     finally:
         conn.close()
 
