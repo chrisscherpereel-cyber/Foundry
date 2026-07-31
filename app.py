@@ -174,7 +174,12 @@ def _sidebar_todo(team):
     """A compact 'what still needs doing this round' tracker in the sidebar."""
     rnd = db.current_round()
     cl = logic.round_checklist(team["id"], rnd)
-    items = cl["decisions"] + cl["questions"] + cl["carried"]
+    items = list(cl["decisions"]) + list(cl["questions"]) + list(cl["carried"])
+    # Reading new Inbox mail is a to-do too (it carries this round's feedback/hints).
+    unread = db.unread_count(team["id"])
+    if unread:
+        items.append({"label": f"Read {unread} new Inbox message(s)", "tool": "Inbox",
+                      "done": False})
     if not items:
         return
     done = sum(1 for i in items if i["done"])

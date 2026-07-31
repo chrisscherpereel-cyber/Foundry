@@ -219,6 +219,30 @@ def _ai_quick_log(team, default_area=None, key="page", show_full_audit=True):
                 st.rerun()
 
 
+def _ai_ack_popover(team, area, key, label="🤖"):
+    """A tiny button next to a text field to acknowledge AI use in one line.
+
+    Renders an st.popover, so it must NOT be placed inside an st.form."""
+    if team is None or logic.editing_locked(team["id"]):
+        return
+    with st.popover(label, help="Used AI for this? Acknowledge it in one line — verify later."):
+        st.caption(f"Acknowledge AI use in **{area}**")
+        with st.form(f"aiack_{key}", clear_on_submit=True):
+            claim = st.text_input("What did the AI suggest? (its claim)", key=f"aiack_c_{key}",
+                                  placeholder=content.AI_CLAIM_EXAMPLE)
+            verify = st.text_input("How will you check it?", key=f"aiack_v_{key}",
+                                   placeholder="ask real customers, run a test…")
+            if st.form_submit_button("Log AI use"):
+                if not claim.strip():
+                    st.error("Add the AI's claim.")
+                else:
+                    db.add_ai_log(team["id"], {
+                        "round": db.current_round(), "tool_area": area, "ai_output": claim,
+                        "verify_plan": verify, "audit_i": verify, "status": "Unverified"})
+                    st.success("Logged as Unverified — verify it later on the AI Assist Log.")
+                    st.rerun()
+
+
 def _ai_check_notice(team=None, tool_area=None):
     """Reusable reminder + in-context quick logger wherever AI is likely to be used."""
     unv = logic.ai_unverified_count(team["id"]) if team else 0
@@ -248,6 +272,7 @@ def _mini_pivot_section(team):
         if logic.editing_locked(team["id"]):
             _committed_banner(team)
         else:
+            _ai_ack_popover(team, "Pivot reasoning", "minipivot_ai", label="🤖 Log AI use here")
             with st.form("mini_pivot_form", clear_on_submit=True):
                 original = st.text_input(
                     "What did you believe that turned out wrong?",
@@ -597,11 +622,15 @@ def _render_concept_question(team, rnd, concept, locked, carried=False):
                               index=(None if prev is None else (0 if prev else 1)),
                               key=f"{key}_q{i}", horizontal=True)
             picks.append(None if choice is None else (choice == "True"))
-        # Applied answer.
-        text = st.text_area(f"➡️ {prompt}", value=stt["text"],
-                            key=f"{key}_text",
-                            help="One or two sentences, using the round's concepts and grounded "
-                                 "in your venture's evidence.")
+        # Applied answer (with a per-field AI-acknowledge button beside it).
+        ta, tb = st.columns([12, 1])
+        with ta:
+            text = st.text_area(f"➡️ {prompt}", value=stt["text"], key=f"{key}_text",
+                                help="One or two sentences, using the round's concepts and "
+                                     "grounded in your venture's evidence.")
+        with tb:
+            st.write("")
+            _ai_ack_popover(team, "Other", f"{key}_ai")
         # Live quality feedback.
         q = logic.answer_quality(text, concept, team["id"])
         _labels = {"complete": "complete", "meaningful": "means something",
@@ -1089,6 +1118,7 @@ def founder_opportunity(team):
 
     if not ventures_editable:
         return
+    _ai_ack_popover(team, "Other", "venture_ai", label="🤖 Log AI use here")
     with st.form("add_venture", clear_on_submit=True):
         st.write("**Add a candidate venture**")
         name = st.text_input(
@@ -1353,6 +1383,8 @@ def canvases(team):
         st.caption(f"{len(existing)} version(s) saved. Editing starts from the latest.")
 
     if canvas_ok:
+        _ai_ack_popover(team, "Business Model", f"canvas_ai_{ctype}",
+                        label="🤖 Log AI use for this canvas")
         with st.form(f"canvas_{ctype}", clear_on_submit=False):
             if ctype == "customer_profile":
                 data = _customer_profile_layout(ctype, val)
@@ -1423,6 +1455,7 @@ def assumptions(team):
     )
 
     if editable:
+        _ai_ack_popover(team, "Assumptions", "asm_ai", label="🤖 Log AI use here")
         with st.form("add_assumption", clear_on_submit=True):
             text = st.text_input(
                 "Assumption (state it as something that must be true)",
@@ -1541,6 +1574,7 @@ def experiments(team):
                f"Watch for bias: {card['bias']}")
 
     if editable:
+      _ai_ack_popover(team, "Experiment design", "exp_ai", label="🤖 Log AI use here")
       with st.form("buy_experiment", clear_on_submit=True):
         if assums:
             assum_id = st.selectbox(
@@ -1706,7 +1740,10 @@ def evidence(team):
     # Inputs live OUTSIDE a form so the misclassification check updates as you type —
     # the point is to make you weigh "behavior vs opinion" before you log.
     if editable:
-        st.write("### Log a piece of evidence")
+        _hdr, _aicol = st.columns([8, 1])
+        _hdr.write("### Log a piece of evidence")
+        with _aicol:
+            _ai_ack_popover(team, "Other", "ev_ai")
         description = st.text_input(
             "What did you learn? (one line)", key="ev_desc",
             placeholder="3 of 5 shop owners asked to join a paid pilot.",
@@ -1865,6 +1902,7 @@ def vp_auction(team):
                 db.delete_value_prop(p["id"])
                 st.rerun()
 
+    _ai_ack_popover(team, "Value Proposition", "vp_ai", label="🤖 Log AI use here")
     with st.form("add_vp", clear_on_submit=True):
         st.write("**Add a value proposition**")
         name = st.text_input(
@@ -2004,6 +2042,7 @@ def pivots(team):
     )
 
     if editable:
+      _ai_ack_popover(team, "Pivot reasoning", "pivot_ai", label="🤖 Log AI use here")
       with st.form("pivot_form", clear_on_submit=True):
         original = st.text_area(
             "Original assumption",
@@ -2103,6 +2142,7 @@ def reflections(team):
         ex = existing or {}
         if existing:
             st.caption("✏️ Editing your existing entry for this round.")
+        _ai_ack_popover(team, "Investor narrative", "journal_ai", label="🤖 Log AI use here")
         with st.form("reflection_form", clear_on_submit=False):
             vals = {}
             for keyname, label, stem in content.journal_core(cur):
