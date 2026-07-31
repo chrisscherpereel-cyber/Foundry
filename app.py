@@ -131,7 +131,6 @@ def landing():
 STUDENT_PAGES = {
     "Round Briefing": vs.round_briefing,
     "Inbox": vs.inbox,
-    "Concept Check": vs.concept_check,
     "Dashboard": vs.dashboard,
     "Progress": vs.progress,
     "Founder & Opportunity": vs.founder_opportunity,
@@ -143,6 +142,7 @@ STUDENT_PAGES = {
     "Evidence Ledger": vs.evidence,
     "Market Events": vs.market_events,
     "Pivot Petition": vs.pivots,
+    "Concept Check": vs.concept_check,
     "AI Assist Log": vs.ai_assist,
     "Decision Journal": vs.reflections,
 }
@@ -168,6 +168,28 @@ def _make_student_label(team):
         return page
 
     return label
+
+
+def _sidebar_todo(team):
+    """A compact 'what still needs doing this round' tracker in the sidebar."""
+    rnd = db.current_round()
+    cl = logic.round_checklist(team["id"], rnd)
+    items = cl["decisions"] + cl["questions"] + cl["carried"]
+    if not items:
+        return
+    done = sum(1 for i in items if i["done"])
+    total = len(items)
+    st.progress(done / total if total else 1.0, text=f"Round {rnd} to-do: {done}/{total} done")
+    open_items = [i for i in items if not i["done"]]
+    if open_items:
+        with st.expander(f"📝 {len(open_items)} still to do"):
+            for i in open_items:
+                tool = i.get("tool", "")
+                carried = " ⏪" if i.get("carried") else ""
+                label = i.get("label", i.get("concept", ""))
+                st.caption(f"⬜ {label}" + (f" · *{tool}*" if tool else "") + carried)
+    else:
+        st.caption("✅ Everything for this round is done.")
 
 
 def _sidebar_commit_status(team):
@@ -215,6 +237,7 @@ def student_shell():
         st.header(f"🎓 {team['name']}")
         st.caption(f"Round {db.current_round()} · {team['stage']}")
         st.metric("Credits", f"{team['evidence_credits']:.1f}")
+        _sidebar_todo(team)
         _sidebar_commit_status(team)
         page = st.radio("Go to", list(STUDENT_PAGES.keys()),
                         format_func=_make_student_label(team))

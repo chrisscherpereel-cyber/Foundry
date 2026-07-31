@@ -408,8 +408,13 @@ def round_briefing(team):
 
     st.markdown("**Decisions to make (actions in the tools)**")
     _render_checklist(cl["decisions"])
-    st.markdown("**Concepts to cover (answer on the Concept Check page)**")
-    _render_checklist(cl["questions"])
+    _concept_questions = [c for c in cl["questions"] if c.get("needs_question", True)]
+    if _concept_questions:
+        st.markdown("**Concepts to answer (short written answers on the Concept Check page)**")
+        _render_checklist(_concept_questions)
+    else:
+        st.caption("✅ Every concept this round is covered by your decisions — nothing to write "
+                   "on the Concept Check page.")
     if cl["carried"]:
         st.markdown("**⏪ Carried over from earlier rounds — finish these now**")
         _render_checklist([{**c, "label": f"(R{c['round']}) {c['label']}"} for c in cl["carried"]])
@@ -510,56 +515,71 @@ def inbox(team):
 def concept_check(team):
     st.subheader("🧠 Concept Check")
     _guide(
-        "To finish a round, every concept introduced that round must be covered — either by a "
-        "decision you make in the tools, or by answering its question here. Write a sentence or "
-        "two for each concept explaining how it applies to YOUR venture. This guarantees no "
-        "concept is skipped, even ones without a hands-on task.",
+        "Every concept introduced this round must be covered — but you don't answer a question "
+        "for all of them. Most are covered automatically by the **decisions you make in the "
+        "tools** (e.g. building a canvas covers 'customer jobs, pains, gains'). Only concepts "
+        "that need judgment — with no hands-on task to prove them — get a short written question "
+        "here.",
         terms=[
-            ("Concept check", "A short answer showing you understand and applied a concept."),
-            ("Coverage", "A concept is 'covered' once you've answered it (or made the matching "
-             "decision)."),
+            ("Covered by a decision", "The concept is proven by doing the matching task — no "
+             "writing needed."),
+            ("Concept check", "A short written answer, only for concepts a decision can't prove."),
         ],
     )
     cur = db.current_round()
-    concepts = logic.round_concepts(cur)
-    if not concepts:
+    prog = logic.concept_progress(team["id"], cur)
+    if not prog:
         st.info("No concepts assigned to this round yet.")
         return
-    st.caption("Each concept below has a short definition and a prompt to explore. Read it, then "
-               "write how it applies to your venture. You can use generative AI to explore — just "
-               "verify it (see the AI Assist Log).")
     answers = db.get_round_answers(team["id"], cur)
     locked = logic.editing_locked(team["id"], cur)
-    if locked:
-        _committed_banner(team)
-        for c in concepts:
-            defn, prompt = content.concept_help(c)
-            done = bool((answers.get(c) or "").strip())
-            with st.container(border=True):
-                st.markdown(f"{'✅' if done else '⬜'} **{c}**")
-                st.caption(f"📖 {defn}")
-                st.write(answers.get(c) or "_(no answer)_")
-    else:
-      with st.form("concept_form"):
-        new = {}
-        for c in concepts:
-            done = bool((answers.get(c) or "").strip())
-            defn, prompt = content.concept_help(c)
-            with st.container(border=True):
-                st.markdown(f"{'✅' if done else '⬜'} **{c}**")
-                st.caption(f"📖 {defn}")
-                new[c] = st.text_area(f"➡️ {prompt}", value=answers.get(c, ""),
-                                      key=f"concept_{cur}_{c}",
-                                      help="Answer in a sentence or two, grounded in your venture.")
-        if st.form_submit_button("Save concept answers"):
-            for c, ans in new.items():
-                db.set_round_answer(team["id"], cur, c, ans)
-            st.success("Answers saved.")
-            st.rerun()
 
-    prog = logic.concept_progress(team["id"], cur)
+    decisions = [c for c in prog if not c.get("needs_question", True)]
+    questions = [c for c in prog if c.get("needs_question", True)]
+
     done_n = sum(1 for p in prog if p["done"])
-    st.caption(f"{done_n}/{len(prog)} concepts covered this round.")
+    st.write(f"### Coverage — {done_n}/{len(prog)} concepts this round")
+
+    # Concepts covered by decisions — status only, no writing.
+    if decisions:
+        st.markdown("**✅ Covered by your decisions (no answer needed)**")
+        for c in decisions:
+            icon = "✅" if c["done"] else "⬜"
+            where = f" — {c['action']} · *{c['tool']}*" if c.get("action") else ""
+            st.markdown(f"{icon} **{c['concept']}**{'' if c['done'] else where}")
+        st.divider()
+
+    # Concepts that genuinely need a written answer.
+    if not questions:
+        st.success("Nothing to write this round — every concept is covered by a decision. 🎉")
+    elif locked:
+        _committed_banner(team)
+        for c in questions:
+            defn, _ = content.concept_help(c["concept"])
+            done = bool((answers.get(c["concept"]) or "").strip())
+            with st.container(border=True):
+                st.markdown(f"{'✅' if done else '⬜'} **{c['concept']}**")
+                st.caption(f"📖 {defn}")
+                st.write(answers.get(c["concept"]) or "_(no answer)_")
+    else:
+        st.markdown("**✍️ These need a short written answer** (a concept no task can prove)")
+        with st.form("concept_form"):
+            new = {}
+            for c in questions:
+                concept = c["concept"]
+                done = bool((answers.get(concept) or "").strip())
+                defn, prompt = content.concept_help(concept)
+                with st.container(border=True):
+                    st.markdown(f"{'✅' if done else '⬜'} **{concept}**")
+                    st.caption(f"📖 {defn}")
+                    new[concept] = st.text_area(f"➡️ {prompt}", value=answers.get(concept, ""),
+                                                key=f"concept_{cur}_{concept}",
+                                                help="A sentence or two, grounded in your venture.")
+            if st.form_submit_button("Save answers"):
+                for concept, ans in new.items():
+                    db.set_round_answer(team["id"], cur, concept, ans)
+                st.success("Answers saved.")
+                st.rerun()
 
     # Show any unanswered concepts carried over from earlier rounds.
     carried = [c for c in logic.outstanding_prior(team["id"], cur) if c.get("kind") == "question"]
@@ -2053,7 +2073,7 @@ def reflections(team):
             st.caption("✏️ Editing your existing entry for this round.")
         with st.form("reflection_form", clear_on_submit=False):
             vals = {}
-            for keyname, label, stem in content.JOURNAL_CORE:
+            for keyname, label, stem in content.journal_core(cur):
                 vals[keyname] = st.text_area(label, value=ex.get(keyname, ""),
                                              placeholder=stem, key=f"jr_{keyname}_{cur}")
             focus_answer = st.text_area(f"🎯 {focus_q}", value=ex.get("focus_answer", ""),

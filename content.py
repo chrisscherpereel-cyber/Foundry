@@ -917,6 +917,60 @@ TOPIC_DELIVERABLES = {
     ],
 }
 
+# --------------------------------------------------------------------------- #
+# Concept → decision mapping. A concept is "covered" the moment the team performs
+# the decision that demonstrates it — no written answer needed. Only concepts that
+# require judgment/reflection (not in this map) are checked with an open-ended
+# question on the Concept Check page.
+# --------------------------------------------------------------------------- #
+CONCEPT_CHECKS = {
+    # founder_formation
+    "Founder means & constraints": "ack_founder_review",
+    "Founder & team time allocation": "time_plan_set",
+    # opportunity_framing
+    "Opportunity portfolio": "ventures_ge_3",
+    "Opportunity scoring": "ventures_ge_3",
+    # customer_discovery
+    "Customer jobs, pains, gains": "cp_ge_1",
+    "Problem interviews": "evidence_ge_2",
+    # customer_evidence
+    "Evidence quality & strength": "evidence_ge_4",
+    # value_creation
+    "Products & services": "vpc_ge_1",
+    "Pain relievers": "vpc_ge_1",
+    "Gain creators": "vpc_ge_1",
+    # value_prop_fit
+    "Prioritization": "vp_results_ge_1",
+    # bmc_architecture
+    "Nine BMC blocks": "bmc_ge_1",
+    # assumption_testing
+    "Desirability, feasibility, viability, adaptability": "assumptions_ge_5",
+    "Assumption mapping": "assumptions_ge_5",
+    "Importance × evidence": "assumptions_ge_5",
+    # experiment_design
+    "Hypotheses & metrics": "experiments_ge_2",
+    "Success/failure thresholds": "experiments_ge_2",
+    "Decision rules": "experiments_ge_2",
+    "Experiment cost": "experiments_ge_2",
+    # market_testing
+    "Minimum viable experiments": "experiment_results_ge_1",
+    "Evidence strength": "experiment_results_ge_1",
+    # pivot_decisions
+    "Pivot, persevere, or stop": "pivots_ge_1",
+    "Evidence-based change": "pivots_ge_1",
+    # business_economics
+    "Pricing": "pricing_exp",
+    # scaling
+    "Channels & partners": "bmc_ge_3",
+    "Key resources/activities": "bmc_ge_3",
+    "Environment scanning (trends & forces)": "env_ge_1",
+    # investment_readiness
+    "Evidence narrative": "reflection_this_round",
+    # venture_market
+    "Business-model defense": "reflection_this_round",
+}
+
+
 # Applies to every round in addition to the topic deliverables.
 UNIVERSAL_DELIVERABLE = {
     "label": "Each member submits a Decision Journal reflection",
@@ -1164,6 +1218,19 @@ JOURNAL_CORE = [
     ("occurred", "What actually happened?", "What actually happened was…"),
     ("differently", "What will you do differently next round?", "Next round we'll…"),
 ]
+# Round 1 has no prior round to assess ("how did you do?" is unanswerable), so the
+# first round's core prompts are forward- and plan-oriented instead of retrospective.
+JOURNAL_CORE_FIRST = [
+    ("expected", "Going in, what do you expect to be the hardest part?",
+     "The hardest part will be…"),
+    ("occurred", "What did you actually do this round?", "This round we…"),
+    ("differently", "What's your first move next round?", "Next round we'll start by…"),
+]
+
+
+def journal_core(round_no):
+    """Round-aware core prompts — forward-looking in round 1, retrospective after."""
+    return JOURNAL_CORE_FIRST if round_no <= 1 else JOURNAL_CORE
 JOURNAL_OPTIONAL = [
     ("assumption", "Which assumption most shaped your decision? (optional)",
      "Our decision hinged on…"),

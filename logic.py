@@ -340,12 +340,28 @@ def round_concepts(rnd):
 
 
 def concept_progress(team_id, rnd):
-    """Each concept this round with whether its concept-check has been answered."""
+    """Each concept this round with how it's covered.
+
+    A concept that maps to a decision (CONCEPT_CHECKS) is covered the moment that
+    decision is done — no written answer required. Only concepts with no such
+    decision are checked with an open-ended question."""
     answers = db.get_round_answers(team_id, rnd)
-    return [{"concept": c, "label": f"Concept check — {c}", "tool": "Concept Check",
-             "kind": "question", "must_update": True,
-             "done": bool((answers.get(c) or "").strip())}
-            for c in round_concepts(rnd)]
+    reqs = {d["check"]: d for d in round_requirements(rnd)}
+    out = []
+    for c in round_concepts(rnd):
+        chk = content.CONCEPT_CHECKS.get(c)
+        if chk:
+            d = reqs.get(chk, {})
+            out.append({"concept": c, "label": c, "kind": "decision", "check": chk,
+                        "tool": d.get("tool", ""), "action": d.get("label", ""),
+                        "needs_question": False, "must_update": True,
+                        "done": _deliverable_done(team_id, chk, rnd)})
+        else:
+            out.append({"concept": c, "label": f"Concept check — {c}",
+                        "tool": "Concept Check", "kind": "question",
+                        "needs_question": True, "must_update": True,
+                        "done": bool((answers.get(c) or "").strip())})
+    return out
 
 
 # ---- Carry-forward of unfinished prior work -------------------------------- #
@@ -359,6 +375,10 @@ def outstanding_prior(team_id, rnd):
                             "kind": "decision"})
         answers = db.get_round_answers(team_id, r)
         for c in round_concepts(r):
+            # Concepts covered by a decision are carried via that decision above —
+            # only genuine open-ended questions are carried here.
+            if content.CONCEPT_CHECKS.get(c):
+                continue
             if not (answers.get(c) or "").strip():
                 out.append({"concept": c, "label": f"Concept check — {c}",
                             "tool": "Concept Check", "round": r, "carried": True,
@@ -1679,6 +1699,11 @@ def _concepts_component(team_id, rnd):
     score_sum = 0.0
     answered = aligned = 0
     for c in cp:
+        if not c.get("needs_question", True):
+            # Concept demonstrated by a decision — full credit once that decision is done.
+            if c["done"]:
+                score_sum += 1.0
+            continue
         ans = (answers.get(c["concept"]) or "").strip()
         if not ans:
             continue
