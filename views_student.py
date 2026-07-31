@@ -117,11 +117,19 @@ def _page_requirements(page, team):
         _render_checklist(prog)
 
 
+def _committed_banner(team):
+    """Shown on any editable page when the round is committed (frozen)."""
+    st.warning("🔒 **This round is committed — your work is locked for scoring.** To make "
+               "changes, click **↩️ Withdraw** in the sidebar. Remember to **Commit** again "
+               "when you're done, or your changes won't be counted.")
+
+
 def _round_gate(page, team):
     """Enforce round alignment on a tool page.
 
     Returns (editable: bool). Locked tools show a lock screen and stop; reference
     tools (introduced but not relevant this round, strict mode) become view-only.
+    A committed round freezes ALL tools (view-only) until the team withdraws.
     Also shades this page's required deliverables when active.
     """
     rnd = db.current_round()
@@ -131,6 +139,11 @@ def _round_gate(page, team):
         st.warning(f"🔒 **Locked.** This tool is introduced in **Round {wk}**. "
                    f"You're in Round {rnd}. It will open when its concepts are taught.")
         st.stop()
+    if logic.editing_locked(team["id"], rnd):
+        _committed_banner(team)
+        if state == "active":
+            _page_requirements(page, team)
+        return False
     editable = logic.tool_editable(page, rnd, team["id"])
     if state == "reference" and not editable:
         opens = logic.active_rounds_for_page(page)
@@ -393,7 +406,18 @@ def concept_check(team):
                "write how it applies to your venture. You can use generative AI to explore — just "
                "verify it (see the AI Assist Log).")
     answers = db.get_round_answers(team["id"], cur)
-    with st.form("concept_form"):
+    locked = logic.editing_locked(team["id"], cur)
+    if locked:
+        _committed_banner(team)
+        for c in concepts:
+            defn, prompt = content.concept_help(c)
+            done = bool((answers.get(c) or "").strip())
+            with st.container(border=True):
+                st.markdown(f"{'✅' if done else '⬜'} **{c}**")
+                st.caption(f"📖 {defn}")
+                st.write(answers.get(c) or "_(no answer)_")
+    else:
+      with st.form("concept_form"):
         new = {}
         for c in concepts:
             done = bool((answers.get(c) or "").strip())
@@ -456,6 +480,9 @@ def founder_skills(team):
     )
     team = logic.sync_round_hours(_refresh_team(team["id"]))
     cur = db.current_round()
+    locked = logic.editing_locked(team["id"], cur)
+    if locked:
+        _committed_banner(team)
     admin = logic.admin_hours(team)
     mgmt = int(logic.management_hours(team["id"]))
     bbudget = logic.build_budget(team)
@@ -488,14 +515,15 @@ def founder_skills(team):
     bc1, bc2 = st.columns([3, 1])
     new_b = bc1.slider("Business development hours (for experiments this round)",
                        int(team.get("spent_build") or 0), max(int(team.get("spent_build") or 0), maxb),
-                       bbudget, 1,
+                       bbudget, 1, disabled=locked,
                        help="Hours reserved for the Experiment Marketplace this round. Can't go "
                             "below what you've already spent, or push effort over 80h.")
     proj = admin + mgmt + new_b + int(team.get("spent_train") or 0) + int(team.get("spent_other") or 0)
     pc, pe, pl = logic.effort_color(proj)
     bc1.markdown(f"<span style='color:{pc}'>{pe} Projected effort with this budget: "
                  f"<b>{proj}/80h</b> ({pl})</span>", unsafe_allow_html=True)
-    if bc2.button("Save budget", type="primary" if new_b != bbudget else "secondary"):
+    if bc2.button("Save budget", type="primary" if new_b != bbudget else "secondary",
+                  disabled=locked):
         logic.set_build_budget(team["id"], new_b)
         st.success("Business-dev budget saved. (Round-1 deliverable ✓)")
         st.rerun()
@@ -556,14 +584,15 @@ def founder_skills(team):
                 default = cap
                 hrs = c2.number_input("Assign hrs", 0, max(0, cap), int(default),
                                       key=f"inv_{s['key']}", label_visibility="collapsed",
+                                      disabled=locked,
                                       help=f"Hours to assign now. {remaining}h finishes this level; "
                                            f"{room}h of effort left this week.")
-                if c2.button("Train", key=f"train_{s['key']}", disabled=(room <= 0)):
+                if c2.button("Train", key=f"train_{s['key']}", disabled=(room <= 0 or locked)):
                     ok, msg = logic.invest_training(team["id"], s["key"], hrs)
                     (st.success if ok else st.error)(msg)
                     st.rerun()
             if xp > 0 or base > logic._card_base_level(team["id"], s["key"]):
-                if c2.button("Undo", key=f"untrain_{s['key']}",
+                if c2.button("Undo", key=f"untrain_{s['key']}", disabled=locked,
                              help="Refund banked hours, or revert one trained level."):
                     ok, msg = logic.untrain_skill(team["id"], s["key"])
                     (st.success if ok else st.error)(msg)
@@ -584,12 +613,13 @@ def founder_skills(team):
             hc1.markdown(f"- **{opt.get('label', h['kind'])} {h['role']}** "
                          f"(+{h['boost']} {content.FOUNDER_SKILL_BY_KEY[h['skill_key']]['name']})"
                          + (f" · ${h['per_round']:.0f}/round" if h["per_round"] else ""))
-            if hc2.button("Let go", key=f"fire_{h['id']}",
+            if hc2.button("Let go", key=f"fire_{h['id']}", disabled=locked,
                           help="Remove this hire and stop the salary."):
                 logic.fire_specialist(h["id"])
                 st.rerun()
 
-    with st.form("hire_form", clear_on_submit=True):
+    if not locked:
+      with st.form("hire_form", clear_on_submit=True):
         hc1, hc2 = st.columns(2)
         skill_key = hc1.selectbox(
             "Skill to strengthen", content.FOUNDER_SKILL_KEYS,
@@ -1794,7 +1824,10 @@ def reflections(team):
         ],
     )
 
-    with st.form("reflection_form", clear_on_submit=True):
+    if logic.editing_locked(team["id"]):
+        _committed_banner(team)
+    else:
+      with st.form("reflection_form", clear_on_submit=True):
         name = st.text_input(
             "Your name", help="Your own name — each journal entry is individual.")
         rnd = st.number_input(
@@ -1868,7 +1901,10 @@ def ai_assist(team):
     st.markdown(content.AI_PROTOCOL_SUMMARY)
 
     st.divider()
-    with st.form("add_ai_log", clear_on_submit=True):
+    if logic.editing_locked(team["id"]):
+        _committed_banner(team)
+    else:
+      with st.form("add_ai_log", clear_on_submit=True):
         st.markdown("**Log a new AI-assisted contribution**")
         c1, c2 = st.columns(2)
         rnd = c1.number_input("Round", 1, logic.total_rounds(), db.current_round(),
@@ -1910,15 +1946,17 @@ def ai_assist(team):
                 st.write(f"- **D** Data/sources: {l['audit_d'] or '—'}")
                 st.write(f"- **I** Independent test: {l['audit_i'] or '—'}")
                 st.write(f"- **T** Translate to evidence: {l['audit_t'] or '—'}")
+                _ailock = logic.editing_locked(team["id"])
                 new_status = st.selectbox(
                     "Update status", content.AI_STATUS_OPTIONS,
                     index=content.AI_STATUS_OPTIONS.index(l["status"]),
-                    key=f"aist_{l['id']}",
+                    key=f"aist_{l['id']}", disabled=_ailock,
                     help="Set to Verified only after a real test supported the AI's claim.")
-                cc1, cc2 = st.columns(2)
-                if cc1.button("Save status", key=f"aisv_{l['id']}"):
-                    db.update_ai_log(l["id"], status=new_status)
-                    st.rerun()
-                if cc2.button("Delete", key=f"aidl_{l['id']}"):
-                    db.delete_ai_log(l["id"])
-                    st.rerun()
+                if not _ailock:
+                    cc1, cc2 = st.columns(2)
+                    if cc1.button("Save status", key=f"aisv_{l['id']}"):
+                        db.update_ai_log(l["id"], status=new_status)
+                        st.rerun()
+                    if cc2.button("Delete", key=f"aidl_{l['id']}"):
+                        db.delete_ai_log(l["id"])
+                        st.rerun()

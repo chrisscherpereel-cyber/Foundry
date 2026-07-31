@@ -170,25 +170,36 @@ def _make_student_label(team):
 
 
 def _sidebar_commit_status(team):
-    """A prominent commit/deadline banner in the team sidebar."""
+    """Commit/withdraw controls + deadline banner, always visible in the team sidebar."""
     rnd = db.current_round()
     state = logic.commitment_state(team["id"], rnd)
     ds = state["deadline"]
+
     if state["committed"]:
         if state["locked"]:
             st.success(f"✅ Round {rnd} committed · locked")
+            st.caption("The deadline has passed — this round is final.")
         else:
-            st.success(f"✅ Round {rnd} committed")
-            st.caption("You can withdraw before the deadline (Round Briefing).")
+            st.success(f"🔒 Round {rnd} committed — editing locked")
+            if st.button("↩️ Withdraw to edit", use_container_width=True,
+                         help="Unlock every tool so you can change your work. Re-commit when done."):
+                ok, msg = logic.decommit_round(team["id"], rnd)
+                st.rerun()
     else:
         if state["locked"]:
             st.error(f"🔒 Round {rnd} closed — not committed")
-        elif ds["set"]:
-            st.warning(f"⚠️ Round {rnd} not committed · due in {ds['remaining']}")
-            st.caption("Commit on the Round Briefing page.")
+            st.caption("The deadline passed before you committed.")
         else:
-            st.warning(f"⚠️ Round {rnd} not committed")
-            st.caption("Commit on the Round Briefing page (no deadline set).")
+            if ds["set"]:
+                st.warning(f"⚠️ Round {rnd} not committed · due in {ds['remaining']}")
+            else:
+                st.warning(f"⚠️ Round {rnd} not committed")
+            if st.button("✅ Commit round", type="primary", use_container_width=True,
+                         help="Lock in this round's work for scoring. Every tool becomes "
+                              "view-only until you withdraw."):
+                ok, msg = logic.commit_round(team["id"], rnd)
+                st.rerun()
+            st.caption("Committing locks all tools. You can withdraw any time before the deadline.")
 
 
 def student_shell():

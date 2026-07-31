@@ -928,6 +928,15 @@ def commitment_state(team_id, rnd):
             "deadline": ds}
 
 
+def editing_locked(team_id, rnd=None):
+    """True when the team's work is frozen for the round — i.e. they've committed.
+
+    While committed, every tool is view-only so a team can't quietly change committed
+    work and forget to re-commit. Withdrawing (before the deadline) unlocks editing."""
+    rnd = db.current_round() if rnd is None else rnd
+    return commitment_state(team_id, rnd)["committed"]
+
+
 def commit_round(team_id, rnd):
     """Team locks in this round's work. No-op if the deadline has passed already."""
     st = commitment_state(team_id, rnd)
