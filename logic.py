@@ -339,12 +339,94 @@ def round_concepts(rnd):
     return seen
 
 
+# ---- Written-answer quality + concept quiz --------------------------------- #
+_ANSWER_EVIDENCE_WORDS = {
+    "evidence", "customer", "customers", "interview", "interviews", "test", "tested", "data",
+    "tried", "paid", "signed", "observed", "survey", "result", "results", "behavior",
+    "behaviour", "willingness", "preorder", "pilot", "experiment", "experiments", "proof",
+}
+
+
+def _quality_feedback(checks):
+    msg = []
+    if not checks["complete"]:
+        msg.append("Write a bit more — a full sentence or two.")
+    if not checks["meaningful"]:
+        msg.append("Say something specific — this reads like filler or repetition.")
+    if not checks["uses_concepts"]:
+        msg.append("Use the round's concepts/terms (e.g. evidence, assumption, value, segment).")
+    if not checks["relevant"]:
+        msg.append("Tie it to YOUR venture/territory or to the concept itself.")
+    if not checks["evidence_based"]:
+        msg.append("Ground it in evidence — what customers did or said, a test, or data.")
+    return msg
+
+
+def answer_quality(text, concept="", team_id=None):
+    """Check an open answer is complete, meaningful, concept-using, relevant, and
+    evidence-based. Returns per-criterion flags + an overall ok. Pass rule: it must
+    be complete and meaningful, and meet at least two of the three substance checks."""
+    text = (text or "").strip()
+    words = re.findall(r"[a-z']+", text.lower())
+    n = len(words)
+    uniq = set(words)
+    checks = {}
+    checks["complete"] = n >= 8
+    checks["meaningful"] = (len(uniq) >= 5 and (len(uniq) / n if n else 0) > 0.4
+                            and not re.search(r"(.)\1{4,}", text.lower()))
+    checks["uses_concepts"] = bool(uniq & content.sim_vocab())
+    ctx = _context_terms(team_id) if team_id is not None else set()
+    cwords = set(re.findall(r"[a-z']{4,}", concept.lower()))
+    checks["relevant"] = bool(uniq & ctx) or bool(uniq & cwords)
+    checks["evidence_based"] = bool(uniq & _ANSWER_EVIDENCE_WORDS)
+    substance = (checks["uses_concepts"] + checks["relevant"] + checks["evidence_based"])
+    ok = checks["complete"] and checks["meaningful"] and substance >= 2
+    return {"ok": ok, "checks": checks, "passed": sum(checks.values()), "total": 5,
+            "feedback": _quality_feedback(checks)}
+
+
+def _parse_concept_response(raw):
+    """A stored concept answer may be JSON {quiz:[...], text:...} or legacy plain text."""
+    raw = (raw or "").strip()
+    if not raw:
+        return {"quiz": None, "text": ""}
+    if raw.startswith("{"):
+        try:
+            d = json.loads(raw)
+            return {"quiz": d.get("quiz"), "text": d.get("text", "")}
+        except (ValueError, TypeError):
+            pass
+    return {"quiz": None, "text": raw}
+
+
+def concept_quiz_correct(concept, quiz_answers):
+    """Whether the team's true/false picks match the concept's quiz (True if no quiz)."""
+    qs = content.CONCEPT_QUIZ.get(concept)
+    if not qs:
+        return True
+    if not quiz_answers or len(quiz_answers) != len(qs):
+        return False
+    return all(bool(a) == bool(truth) for (_, truth), a in zip(qs, quiz_answers))
+
+
+def concept_answer_status(team_id, rnd, concept, answers=None):
+    """Full status of a written concept: parsed response, quiz correctness, answer
+    quality, and whether it's DONE (quiz correct AND answer passes quality)."""
+    if answers is None:
+        answers = db.get_round_answers(team_id, rnd)
+    r = _parse_concept_response(answers.get(concept))
+    quality = answer_quality(r["text"], concept, team_id)
+    quiz_ok = concept_quiz_correct(concept, r["quiz"])
+    return {"text": r["text"], "quiz": r["quiz"], "quiz_ok": quiz_ok,
+            "quality": quality, "done": quiz_ok and quality["ok"]}
+
+
 def concept_progress(team_id, rnd):
     """Each concept this round with how it's covered.
 
     A concept that maps to a decision (CONCEPT_CHECKS) is covered the moment that
-    decision is done — no written answer required. Only concepts with no such
-    decision are checked with an open-ended question."""
+    decision is done — no written answer required. Concepts with no such decision
+    are checked with a short true/false quiz plus a quality-checked applied answer."""
     answers = db.get_round_answers(team_id, rnd)
     reqs = {d["check"]: d for d in round_requirements(rnd)}
     out = []
@@ -357,10 +439,12 @@ def concept_progress(team_id, rnd):
                         "needs_question": False, "must_update": True,
                         "done": _deliverable_done(team_id, chk, rnd)})
         else:
+            stt = concept_answer_status(team_id, rnd, c, answers)
             out.append({"concept": c, "label": f"Concept check — {c}",
                         "tool": "Concept Check", "kind": "question",
                         "needs_question": True, "must_update": True,
-                        "done": bool((answers.get(c) or "").strip())})
+                        "has_quiz": bool(content.CONCEPT_QUIZ.get(c)),
+                        "done": stt["done"]})
     return out
 
 
@@ -379,7 +463,7 @@ def outstanding_prior(team_id, rnd):
             # only genuine open-ended questions are carried here.
             if content.CONCEPT_CHECKS.get(c):
                 continue
-            if not (answers.get(c) or "").strip():
+            if not concept_answer_status(team_id, r, c, answers)["done"]:
                 out.append({"concept": c, "label": f"Concept check — {c}",
                             "tool": "Concept Check", "round": r, "carried": True,
                             "kind": "question", "must_update": True, "done": False})
@@ -1694,7 +1778,6 @@ def _concepts_component(team_id, rnd):
     if not cp:
         return 100.0, 0, 0, 0
     answers = db.get_round_answers(team_id, rnd)
-    terms = _context_terms(team_id)
     total = len(cp)
     score_sum = 0.0
     answered = aligned = 0
@@ -1704,17 +1787,15 @@ def _concepts_component(team_id, rnd):
             if c["done"]:
                 score_sum += 1.0
             continue
-        ans = (answers.get(c["concept"]) or "").strip()
-        if not ans:
-            continue
-        answered += 1
-        if not terms:                       # can't judge alignment → full credit
-            score_sum += 1.0
-        elif _answer_aligned(ans, terms):
-            score_sum += 1.0
-            aligned += 1
-        else:
-            score_sum += 0.6                # answered but generic
+        stt = concept_answer_status(team_id, rnd, c["concept"], answers)
+        if stt["done"]:
+            score_sum += 1.0                    # complete, quality answer + correct quiz
+            answered += 1
+            if stt["quality"]["checks"]["relevant"]:
+                aligned += 1
+        elif stt["text"].strip() or stt["quiz"] is not None:
+            score_sum += 0.4                    # attempted but incomplete / wrong quiz
+            answered += 1
     return 100.0 * score_sum / total, answered, aligned, total
 
 

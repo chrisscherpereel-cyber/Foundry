@@ -515,17 +515,21 @@ def inbox(team):
 def concept_check(team):
     st.subheader("🧠 Concept Check")
     _guide(
-        "Every concept introduced this round must be covered — but you don't answer a question "
-        "for all of them. Most are covered automatically by the **decisions you make in the "
-        "tools** (e.g. building a canvas covers 'customer jobs, pains, gains'). Only concepts "
-        "that need judgment — with no hands-on task to prove them — get a short written question "
-        "here.",
+        "Every concept introduced this round must be covered — but not all the same way. Most "
+        "are covered automatically by the **decisions you make in the tools** (e.g. building a "
+        "canvas covers 'customer jobs, pains, gains'). Concepts that need judgment get a quick "
+        "**true/false understanding check** plus a one-sentence application to your venture. An "
+        "answer only counts when it's **complete, meaningful, uses the course concepts, is "
+        "relevant to your venture, and is evidence-based** — the live checklist shows you what's "
+        "still missing.",
         terms=[
             ("Covered by a decision", "The concept is proven by doing the matching task — no "
              "writing needed."),
-            ("Concept check", "A short written answer, only for concepts a decision can't prove."),
+            ("Understanding check", "A short true/false that tests you get the idea."),
+            ("Applied answer", "A sentence connecting the concept to your venture, quality-checked."),
         ],
     )
+    _ai_check_notice(team, tool_area="Other")
     cur = db.current_round()
     prog = logic.concept_progress(team["id"], cur)
     if not prog:
@@ -549,54 +553,75 @@ def concept_check(team):
             st.markdown(f"{icon} **{c['concept']}**{'' if c['done'] else where}")
         st.divider()
 
-    # Concepts that genuinely need a written answer.
+    # Concepts that genuinely need a quick understanding check + applied answer.
     if not questions:
         st.success("Nothing to write this round — every concept is covered by a decision. 🎉")
-    elif locked:
-        _committed_banner(team)
-        for c in questions:
-            defn, _ = content.concept_help(c["concept"])
-            done = bool((answers.get(c["concept"]) or "").strip())
-            with st.container(border=True):
-                st.markdown(f"{'✅' if done else '⬜'} **{c['concept']}**")
-                st.caption(f"📖 {defn}")
-                st.write(answers.get(c["concept"]) or "_(no answer)_")
     else:
-        st.markdown("**✍️ These need a short written answer** (a concept no task can prove)")
-        with st.form("concept_form"):
-            new = {}
-            for c in questions:
-                concept = c["concept"]
-                done = bool((answers.get(concept) or "").strip())
-                defn, prompt = content.concept_help(concept)
-                with st.container(border=True):
-                    st.markdown(f"{'✅' if done else '⬜'} **{concept}**")
-                    st.caption(f"📖 {defn}")
-                    new[concept] = st.text_area(f"➡️ {prompt}", value=answers.get(concept, ""),
-                                                key=f"concept_{cur}_{concept}",
-                                                help="A sentence or two, grounded in your venture.")
-            if st.form_submit_button("Save answers"):
-                for concept, ans in new.items():
-                    db.set_round_answer(team["id"], cur, concept, ans)
-                st.success("Answers saved.")
-                st.rerun()
+        st.markdown("**🧩 Quick understanding check** — a true/false on the idea, then apply it "
+                    "to your venture in a sentence.")
+        for c in questions:
+            _render_concept_question(team, cur, c["concept"], locked)
 
-    # Show any unanswered concepts carried over from earlier rounds.
+    # Concepts carried over from earlier rounds (same check applies).
     carried = [c for c in logic.outstanding_prior(team["id"], cur) if c.get("kind") == "question"]
     if carried:
         st.divider()
-        st.markdown("**⏪ Concepts still open from earlier rounds — answer these too**")
-        with st.form("concept_carry_form"):
-            cnew = {}
-            for c in carried:
-                cnew[(c["round"], c["concept"])] = st.text_area(
-                    f"(R{c['round']}) {c['concept']}", key=f"cc_{c['round']}_{c['concept']}")
-            if st.form_submit_button("Save carried-over answers"):
-                for (r, concept), ans in cnew.items():
-                    if ans.strip():
-                        db.set_round_answer(team["id"], r, concept, ans)
-                st.success("Saved.")
-                st.rerun()
+        st.markdown("**⏪ Concepts still open from earlier rounds — finish these too**")
+        for c in carried:
+            _render_concept_question(team, c["round"], c["concept"], locked, carried=True)
+
+
+def _render_concept_question(team, rnd, concept, locked, carried=False):
+    """One reasoning concept: a true/false understanding check + a quality-checked
+    applied answer. Rendered outside a form so quality feedback updates live."""
+    stt = logic.concept_answer_status(team["id"], rnd, concept)
+    defn, prompt = content.concept_help(concept)
+    quiz = content.CONCEPT_QUIZ.get(concept, [])
+    tag = f"(R{rnd}) " if carried else ""
+    with st.container(border=True):
+        st.markdown(f"{'✅' if stt['done'] else '⬜'} **{tag}{concept}**")
+        st.caption(f"📖 {defn}")
+        if locked:
+            _committed_banner(team)
+            st.write(stt["text"] or "_(no answer)_")
+            return
+
+        key = f"cq_{rnd}_{concept}"
+        # True/false understanding check.
+        picks = []
+        stored_quiz = stt["quiz"] or []
+        for i, (stmt, _truth) in enumerate(quiz):
+            prev = stored_quiz[i] if i < len(stored_quiz) else None
+            choice = st.radio(f"True or false? *{stmt}*",
+                              ["True", "False"],
+                              index=(None if prev is None else (0 if prev else 1)),
+                              key=f"{key}_q{i}", horizontal=True)
+            picks.append(None if choice is None else (choice == "True"))
+        # Applied answer.
+        text = st.text_area(f"➡️ {prompt}", value=stt["text"],
+                            key=f"{key}_text",
+                            help="One or two sentences, using the round's concepts and grounded "
+                                 "in your venture's evidence.")
+        # Live quality feedback.
+        q = logic.answer_quality(text, concept, team["id"])
+        _labels = {"complete": "complete", "meaningful": "means something",
+                   "uses_concepts": "uses course concepts", "relevant": "relevant to your venture",
+                   "evidence_based": "evidence-based"}
+        st.caption("Answer check: " + "  ".join(
+            f"{'✅' if q['checks'][k] else '⬜'} {_labels[k]}" for k in
+            ["complete", "meaningful", "uses_concepts", "relevant", "evidence_based"]))
+        quiz_ok = logic.concept_quiz_correct(concept, picks) if quiz else True
+        if st.button("Save", key=f"{key}_save"):
+            import json as _json
+            db.set_round_answer(team["id"], rnd, concept,
+                                _json.dumps({"quiz": picks, "text": text}))
+            if not quiz_ok:
+                st.warning("Saved — but re-check the true/false: it's not right yet.")
+            elif not q["ok"]:
+                st.warning("Saved — strengthen the answer: " + " ".join(q["feedback"]))
+            else:
+                st.success("Concept covered. ✅")
+            st.rerun()
 
 
 # --------------------------------------------------------------------------- #
@@ -959,6 +984,7 @@ def progress(team):
 def founder_opportunity(team):
     st.subheader("🧭 Founder & Opportunity Formation")
     editable = _round_gate("Founder & Opportunity", team)
+    _ai_check_notice(team, tool_area="Other")
     _guide(
         "You are founders newly accepted into the Venture Foundry accelerator. You do NOT "
         "start with a product — you start with a broad **opportunity territory** and a "
@@ -1374,6 +1400,7 @@ def canvases(team):
 def assumptions(team):
     st.subheader("🎯 Assumption Map & Market")
     editable = _round_gate("Assumption Map", team)
+    _ai_check_notice(team, tool_area="Assumptions")
     _guide(
         "Every box on your canvases hides an assumption — something that must be TRUE for the "
         "venture to work. Here you list those assumptions and rank them. The simulation "
@@ -1650,6 +1677,7 @@ def experiments(team):
 def evidence(team):
     st.subheader("📒 Evidence Ledger")
     editable = _round_gate("Evidence Ledger", team)
+    _ai_check_notice(team, tool_area="Other")
     _guide(
         "This is your proof file and your income source. Every time you gather real evidence, "
         "log it here. The simulation pays you Evidence Credits equal to the evidence's strength "
@@ -1766,6 +1794,7 @@ def evidence(team):
 def vp_auction(team):
     st.subheader("💠 Value Proposition Auction")
     editable = _round_gate("VP Auction", team)
+    _ai_check_notice(team, tool_area="Value Proposition")
     _guide(
         f"You created several value propositions — now show which you back most. You have "
         f"{content.VENTURE_TOKEN_POOL} Venture Tokens to spread across them. Betting big on an "
@@ -1952,6 +1981,7 @@ def market_events(team):
 def pivots(team):
     st.subheader("🔀 Pivot Petition")
     editable = _round_gate("Pivot Petition", team)
+    _ai_check_notice(team, tool_area="Pivot reasoning")
     _guide(
         "A pivot is a deliberate change of direction backed by evidence — not just swapping to "
         "a new idea because the old one struggled. You can't simply declare a pivot; you file a "
@@ -2044,6 +2074,8 @@ def reflections(team):
             ("My contribution", "What YOU specifically did — this protects against free-riding."),
         ],
     )
+
+    _ai_check_notice(team, tool_area="Investor narrative")
 
     # Remember who's writing so they don't retype every round.
     name = st.text_input("Your name", value=st.session_state.get("journal_name", ""),

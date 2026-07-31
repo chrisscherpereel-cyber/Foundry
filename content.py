@@ -971,6 +971,101 @@ CONCEPT_CHECKS = {
 }
 
 
+# --------------------------------------------------------------------------- #
+# Concept quiz — a quick true/false understanding check for each concept that
+# needs a written answer. Correct answers gate coverage alongside the applied
+# answer, so teams show they GET the concept, not just that they typed something.
+# --------------------------------------------------------------------------- #
+CONCEPT_QUIZ = {
+    "Entrepreneurial opportunity vs. idea": [
+        ("An opportunity is a real, important customer problem worth solving — not just a "
+         "product you imagine.", True)],
+    "Effectuation: bird-in-hand": [
+        ("Effectuation means starting from a fixed goal and predicting returns before you act.",
+         False)],
+    "Customer segment hypotheses": [
+        ("A good customer-segment hypothesis is specific enough that you could go find five of "
+         "those customers.", True)],
+    "Behavior vs. opinion": [
+        ("What a customer actually did is stronger evidence than what they said they might do.",
+         True)],
+    "Pattern vs. contradiction": [
+        ("If new evidence contradicts your belief, the disciplined response is to ignore it and "
+         "keep going.", False)],
+    "Unsupported beliefs": [
+        ("An untested assumption should be treated as fact if it feels obviously true.", False)],
+    "Problem–solution fit": [
+        ("Problem–solution fit means your offer relieves pains and creates gains the customer "
+         "actually cares about.", True)],
+    "Confidence vs. evidence": [
+        ("Betting heavily on an idea your evidence doesn't support is rewarded in this "
+         "simulation.", False)],
+    "Block interdependence": [
+        ("Changing one block of the Business Model Canvas can force changes in the others.",
+         True)],
+    "Value capture": [
+        ("Value capture is about how the business earns revenue and sustains itself, not only "
+         "the value it creates for customers.", True)],
+    "Learning per dollar": [
+        ("The best experiment is always the most expensive and thorough one.", False)],
+    "Sunk-cost discipline": [
+        ("Money and time already spent should decide whether you keep pursuing a failing idea.",
+         False)],
+    "Revenue & cost structure": [
+        ("A business model needs both how it earns money and what it costs to deliver.", True)],
+    "Unit economics": [
+        ("Unit economics ask whether a single sale earns more than it costs to serve.", True)],
+    "Contribution margin": [
+        ("Contribution margin is revenue per unit minus the variable cost of that unit.", True)],
+    "Defensibility": [
+        ("Defensibility is about why competitors can't easily copy or undercut your model.",
+         True)],
+    "Business-model coherence": [
+        ("A coherent business model has blocks that reinforce each other and are backed by "
+         "evidence.", True)],
+    "Due diligence": [
+        ("Investors accept a founder's claims at face value without checking the evidence.",
+         False)],
+    "Remaining uncertainty": [
+        ("A strong final pitch honestly states what is still an untested assumption.", True)],
+    "Next experiment": [
+        ("Once you have a business model, there's no value in identifying the next experiment.",
+         False)],
+}
+
+# Domain vocabulary used to check that a written answer actually engages with the
+# simulation's concepts (not generic filler).
+_SIM_VOCAB_BASE = {
+    "customer", "customers", "segment", "segments", "evidence", "assumption", "assumptions",
+    "pivot", "persevere", "value", "proposition", "propositions", "pain", "pains", "gain",
+    "gains", "job", "jobs", "experiment", "experiments", "hypothesis", "metric", "threshold",
+    "market", "price", "pricing", "cost", "costs", "revenue", "margin", "channel", "channels",
+    "behavior", "behaviour", "opinion", "willingness", "interview", "interviews", "test",
+    "tested", "testing", "preorder", "prototype", "canvas", "risk", "desirability", "feasibility",
+    "viability", "adaptability", "founder", "opportunity", "business", "model", "fit",
+    "commitment", "signal", "learning", "defensibility", "unit", "economics", "investor",
+    "coherence", "uncertainty", "verify", "validate", "data", "survey", "pilot", "trial",
+}
+
+
+_SIM_VOCAB_CACHE = None
+
+
+def sim_vocab():
+    """Simulation concept vocabulary: curated domain terms + words from every concept name."""
+    global _SIM_VOCAB_CACHE
+    if _SIM_VOCAB_CACHE is None:
+        vocab = set(_SIM_VOCAB_BASE)
+        for topic in CURRICULUM_TOPICS:
+            for c in topic.get("concepts", []):
+                for w in c.lower().replace("/", " ").replace("–", " ").split():
+                    w = "".join(ch for ch in w if ch.isalpha())
+                    if len(w) >= 4:
+                        vocab.add(w)
+        _SIM_VOCAB_CACHE = vocab
+    return _SIM_VOCAB_CACHE
+
+
 # Applies to every round in addition to the topic deliverables.
 UNIVERSAL_DELIVERABLE = {
     "label": "Each member submits a Decision Journal reflection",
