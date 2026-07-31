@@ -161,78 +161,118 @@ def _round_gate(page, team):
     return editable
 
 
-def _ai_full_log(team, area, key):
-    """Full AI-use audit for every logged use: the prompt, the AI's output, HOW it was
-    used, and an AUDIT answered mostly by dropdowns (text notes optional)."""
+def _split_pick(value, options):
+    """Recover a (dropdown-pick, note) pair from a stored 'pick — note' string."""
+    value = value or ""
+    pick, _, note = value.partition(" — ")
+    if pick in options:
+        return pick, note
+    return options[0], value
+
+
+def _ai_full_log(team, area, key, existing=None):
+    """Full AI-use audit: prompt, output, HOW it was used, and a dropdown AUDIT.
+
+    When `existing` (a log dict) is given, every field is pre-filled and editing SAVES
+    changes to that log; otherwise it creates a new one. Both prompt and output are
+    required. Not placed inside an st.form by callers."""
     if logic.editing_locked(team["id"]):
         _committed_banner(team)
         return
+    e = existing or {}
+
+    def _idx(opts, val, default=0):
+        return opts.index(val) if val in opts else default
+
     assums = db.list_assumptions(team["id"])
-    with st.form(f"ai_full_{key}", clear_on_submit=True):
-        if area:
-            # The button already knows WHERE it was used — record it automatically.
+    with st.form(f"ai_full_{key}", clear_on_submit=(existing is None)):
+        if existing is not None:
+            tool_area = st.text_input("Where did you use AI?", value=e.get("tool_area", ""),
+                                      key=f"af_area_{key}")
+        elif area:
             tool_area = area
             st.caption(f"Logging AI use for: **{tool_area}** · Round {db.current_round()}")
         else:
             tool_area = st.selectbox("Where did you use AI?", content.AI_TOOL_AREAS,
                                      key=f"af_area_{key}")
         use_type = st.selectbox("How did you use the AI?", content.AI_USE_TYPES,
+                                index=_idx(content.AI_USE_TYPES, e.get("use_type")),
                                 key=f"af_use_{key}",
                                 help="An indication of the kind of help — this is recorded.")
-        prompt = st.text_area("Your prompt (what you asked)", key=f"af_p_{key}",
+        prompt = st.text_area("Your prompt (required)", value=e.get("prompt", ""),
+                              key=f"af_p_{key}",
                               placeholder="Paste or paraphrase what you asked the AI.")
-        output = st.text_area("The AI's output / key claim (required)", key=f"af_o_{key}",
+        output = st.text_area("The AI's response / key claim (required)",
+                              value=e.get("ai_output", ""), key=f"af_o_{key}",
                               placeholder=content.AI_CLAIM_EXAMPLE,
                               help="What the AI produced. Treat it as opinion until verified.")
         st.markdown("**Audit** — pick from the dropdowns (fast):")
+        pa, na = _split_pick(e.get("audit_a"), content.AI_AUDIT_ASSUMPTIONS)
+        pu, nu = _split_pick(e.get("audit_u"), content.AI_AUDIT_UNSUPPORTED)
+        pv, nv = _split_pick(e.get("verify_plan") or e.get("audit_i"), content.AI_VERIFY_METHODS)
         a1, a2 = st.columns(2)
         a_assum = a1.selectbox("Hidden assumptions?", content.AI_AUDIT_ASSUMPTIONS,
+                               index=_idx(content.AI_AUDIT_ASSUMPTIONS, pa) if existing else 0,
                                key=f"af_a_{key}", help="Did you find what must be true for it to hold?")
         a_unsup = a2.selectbox("Unsupported claims?", content.AI_AUDIT_UNSUPPORTED,
+                               index=_idx(content.AI_AUDIT_UNSUPPORTED, pu) if existing else 0,
                                key=f"af_u_{key}", help="Confident statements with no evidence.")
         a3, a4 = st.columns(2)
-        a_data = a3.selectbox("Sources / data?", content.AI_DATA_SOURCES, key=f"af_d_{key}",
-                              help="AI often invents sources — pick honestly.")
+        a_data = a3.selectbox("Sources / data?", content.AI_DATA_SOURCES,
+                              index=_idx(content.AI_DATA_SOURCES, e.get("data_source")),
+                              key=f"af_d_{key}", help="AI often invents sources — pick honestly.")
         a_verify = a4.selectbox("How will you verify?", content.AI_VERIFY_METHODS,
+                                index=_idx(content.AI_VERIFY_METHODS, pv) if existing else 0,
                                 key=f"af_v_{key}", help="A real-world check — not the AI itself.")
-        status = st.selectbox("Status", content.AI_STATUS_OPTIONS, key=f"af_s_{key}",
+        status = st.selectbox("Status", content.AI_STATUS_OPTIONS,
+                              index=_idx(content.AI_STATUS_OPTIONS, e.get("status")),
+                              key=f"af_s_{key}",
                               help="Unverified until a real test settles it. Verifying is what "
                                    "the round score rewards.")
         link_id = None
         if assums:
             opts = [None] + [a["id"] for a in assums]
             link_id = st.selectbox(
-                "Link to an assumption to auto-verify (optional)", opts, key=f"af_link_{key}",
+                "Link to an assumption to auto-verify (optional)", opts,
+                index=_idx(opts, e.get("assumption_id")), key=f"af_link_{key}",
                 format_func=lambda i: "—" if i is None
-                else next(a["text"] for a in assums if a["id"] == i),
+                else next((a["text"] for a in assums if a["id"] == i), "—"),
                 help="When the linked assumption tests Supported/Refuted, this log flips to "
                      "Verified/Rejected automatically.")
         notes = {}
-        with st.expander("Add written notes (optional)"):
-            notes["a"] = st.text_area("Assumptions — details", key=f"afn_a_{key}")
-            notes["u"] = st.text_area("Unsupported claims — details", key=f"afn_u_{key}")
-            notes["i"] = st.text_area("Verification plan — details", key=f"afn_i_{key}")
-            notes["t"] = st.text_area("How you'll translate it into evidence", key=f"afn_t_{key}")
+        with st.expander("Add written notes (optional)", expanded=bool(na or nu or nv or e.get("audit_t"))):
+            notes["a"] = st.text_area("Assumptions — details", value=na, key=f"afn_a_{key}")
+            notes["u"] = st.text_area("Unsupported claims — details", value=nu, key=f"afn_u_{key}")
+            notes["i"] = st.text_area("Verification plan — details", value=nv, key=f"afn_i_{key}")
+            notes["t"] = st.text_area("How you'll translate it into evidence",
+                                      value=e.get("audit_t", ""), key=f"afn_t_{key}")
 
         def _join(pick, note):
             note = (note or "").strip()
             return f"{pick} — {note}" if note else pick
 
-        if st.form_submit_button("Log AI use", type="primary"):
-            if not output.strip():
-                st.error("Add the AI's output/claim — that's the key thing to record.")
+        label = "Save changes" if existing is not None else "Log AI use"
+        if st.form_submit_button(label, type="primary"):
+            if not prompt.strip() or not output.strip():
+                st.error("Both the **prompt** and the **AI response** are required.")
             else:
-                db.add_ai_log(team["id"], {
-                    "round": db.current_round(), "tool_area": tool_area, "use_type": use_type,
+                fields = {
+                    "tool_area": tool_area, "use_type": use_type,
                     "prompt": prompt, "ai_output": output,
                     "audit_a": _join(a_assum, notes["a"]),
                     "audit_u": _join(a_unsup, notes["u"]),
                     "audit_d": a_data, "data_source": a_data,
                     "audit_i": _join(a_verify, notes["i"]), "verify_plan": a_verify,
                     "audit_t": notes["t"], "assumption_id": link_id, "status": status,
-                })
-                st.success("AI use logged with its audit. It auto-verifies if you linked an "
-                           "assumption; otherwise update its status once you've checked it.")
+                }
+                if existing is not None:
+                    db.update_ai_log(existing["id"], **fields)
+                    st.session_state.pop("ai_edit_id", None)
+                    st.success("AI log updated.")
+                else:
+                    db.add_ai_log(team["id"], {"round": db.current_round(), **fields})
+                    st.success("AI use logged with its audit. It auto-verifies if you linked an "
+                               "assumption; otherwise update its status once you've checked it.")
                 st.rerun()
 
 
@@ -2244,12 +2284,25 @@ def ai_assist(team):
         st.warning(f"⏳ **{unv} AI use(s) still unverified.** Link each to an assumption and run "
                    "the test, or set its status once you've checked it.")
 
+    # An entry being edited is rendered here (outside the list — expanders can't nest).
+    edit_id = st.session_state.get("ai_edit_id")
+    edit_log = None
+    if edit_id:
+        edit_log = next((x for x in db.list_ai_logs(team["id"]) if x["id"] == edit_id), None)
+
     st.divider()
-    st.write("### Log AI use")
-    st.caption("Record the prompt, the AI's output, and how you used it — then run a quick "
-               "dropdown audit. Logging AI is about *evaluating* it, not using it. Link a claim "
-               "to an assumption and it **auto-verifies** when your test settles.")
-    _ai_full_log(team, None, "ailog")
+    if edit_log is not None and not logic.editing_locked(team["id"]):
+        st.write("### ✏️ Edit AI log entry")
+        if st.button("← Cancel edit", key="ai_cancel_edit"):
+            st.session_state.pop("ai_edit_id", None)
+            st.rerun()
+        _ai_full_log(team, None, f"edit_{edit_id}", existing=edit_log)
+    else:
+        st.write("### Log AI use")
+        st.caption("Record the prompt, the AI's response, and how you used it — then run a quick "
+                   "dropdown audit. Logging AI is about *evaluating* it, not using it. Link a claim "
+                   "to an assumption and it **auto-verifies** when your test settles.")
+        _ai_full_log(team, None, "ailog")
 
     logs = db.list_ai_logs(team["id"])
     if logs:
@@ -2279,7 +2332,10 @@ def ai_assist(team):
                     st.caption(f"🔗 Linked to assumption: *{assum_by_id[l['assumption_id']]}* "
                                "(auto-verifies when tested)")
                 if not _locked:
-                    st.caption("Set the outcome once you've checked it:")
+                    if st.button("✏️ Edit all fields", key=f"aiedit_{l['id']}"):
+                        st.session_state["ai_edit_id"] = l["id"]
+                        st.rerun()
+                    st.caption("Or set the outcome with one click:")
                     cols = st.columns(len(_STATUS_BTN) + 1)
                     for i, (lbl, val) in enumerate(_STATUS_BTN):
                         if cols[i].button(lbl, key=f"aibtn_{val}_{l['id']}",
