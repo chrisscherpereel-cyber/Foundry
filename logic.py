@@ -522,27 +522,26 @@ def add_skill_progress(team_id, skill_key, eff_hours):
 
 
 def invest_training(team_id, skill_key, hours):
-    """Spend founder-hours training a skill; the hours bank as XP toward the next
-    level (partial effort carries over). Returns (ok, message)."""
+    """Assign founder time to training a skill. The hours count toward this round's
+    effort (capped at 80) and bank exactly as XP toward the next level — partial
+    effort carries over to future rounds. Returns (ok, message)."""
     hours = int(hours)
     if hours <= 0:
         return False, "Enter a positive number of hours."
     lvl = db.get_team_skills(team_id).get(skill_key, 0)
     if lvl >= content.SKILL_MAX:
         return False, "Already at maximum level."
-    ok, msg = db.adjust_resources(
-        team_id, hours=-hours, kind="training",
-        description=f"Trained {content.FOUNDER_SKILL_BY_KEY[skill_key]['name']}")
-    if not ok:
-        return False, msg
+    room = effort_headroom(db.get_team(team_id))
+    if hours > room:
+        return False, (f"That would push the founder over 80 hours. Only {room}h of effort "
+                       "left this week — free some up or work fewer tasks.")
     _add_usage(team_id, "spent_train", hours)
     gained = add_skill_progress(team_id, skill_key, hours)
     name = content.FOUNDER_SKILL_BY_KEY[skill_key]["name"]
-    if gained:
-        _, xp, nxt = skill_progress(team_id, skill_key)
-        return True, f"Invested {hours}h — {name} rose {gained} level(s)! ({xp}/{nxt} toward next)."
     _, xp, nxt = skill_progress(team_id, skill_key)
-    return True, f"Invested {hours}h — banked toward {name} ({xp}/{nxt} to next level)."
+    if gained:
+        return True, f"Assigned {hours}h — {name} rose {gained} level(s)! ({xp}/{nxt} toward next)."
+    return True, f"Assigned {hours}h — banked toward {name} ({xp}/{nxt} to next level)."
 
 
 def _card_base_level(team_id, skill_key):
@@ -551,24 +550,24 @@ def _card_base_level(team_id, skill_key):
 
 
 def untrain_skill(team_id, skill_key):
-    """Change your mind: first refund any banked (not-yet-levelled) training hours;
-    otherwise revert one trained level (down to the founder card's starting level)
-    and refund its cost. Learning-by-doing progress and starting levels are kept."""
+    """Change your mind: first drop any banked (not-yet-levelled) training progress
+    for this skill, freeing that effort back up; otherwise revert one trained level
+    (down to the founder card's starting level). Learning-by-doing and starting
+    levels are kept."""
     lvl = db.get_team_skills(team_id).get(skill_key, 0)
     xp = db.get_skill_xp(team_id, skill_key)
     base = _card_base_level(team_id, skill_key)
     name = content.FOUNDER_SKILL_BY_KEY[skill_key]["name"]
     if xp > 0:
-        db.adjust_resources(team_id, hours=xp, kind="training_undo",
-                            description=f"Refunded banked training: {name}", allow_negative=True)
+        # free the effort back (reduce this round's training usage)
+        freed = min(int(db.get_team(team_id).get("spent_train") or 0), xp)
+        if freed:
+            _add_usage(team_id, "spent_train", -freed)
         db.set_skill_xp(team_id, skill_key, 0)
-        return True, f"Refunded {xp} banked training hours for {name}."
+        return True, f"Dropped {xp}h of banked training for {name} (freed {freed}h of effort)."
     if lvl > base:
-        refund = cost_to_next(lvl - 1)
-        db.adjust_resources(team_id, hours=refund, kind="training_undo",
-                            description=f"Undid a level of {name}", allow_negative=True)
         db.set_skill_level(team_id, skill_key, lvl - 1)
-        return True, f"{name} reverted to level {lvl - 1} (refunded {refund}h)."
+        return True, f"{name} reverted to level {lvl - 1}."
     return False, "Nothing to undo — this is the founder's starting level."
 
 
@@ -624,52 +623,75 @@ def productive_hours(raw):
     return int(round(content.FULL_PRODUCTIVITY_HOURS + over * content.OVERWORK_PRODUCTIVITY))
 
 
-def recommended_weekly(team):
-    """The recommended weekly hours (Director default or difficulty), the fully
-    productive target (≤ 40 counts fully; this is usually 40–80)."""
-    override = db.get_setting("econ_hours_per_week")
-    if override not in (None, ""):
-        try:
-            return float(override)
-        except (TypeError, ValueError):
-            pass
-    return team.get("hours_per_round") or content.DEFAULT_HOURS_PER_WEEK
-
-
-def effort_hours(team):
-    """The raw hours the founder actually chooses to work this week (40–80).
-    Defaults to the recommended level; the team may push it up to the hard cap."""
-    e = team.get("effort_hours")
-    base = recommended_weekly(team)
-    val = e if e else base
-    return max(content.FULL_PRODUCTIVITY_HOURS, min(content.MAX_WEEKLY_HOURS, val))
-
-
-# Backwards-compatible alias used by older callers / the founder card.
-def weekly_hours(team):
-    return effort_hours(team)
-
-
+# --------------------------------------------------------------------------- #
+# Time model — the founder's weekly EFFORT is an OUTPUT of how the team assigns
+# time to tasks, not a chosen slider. Effort = admin (grows with rounds) +
+# managing hires + business-development budget + training + hiring time. It is
+# hard-capped at 80 hours and colour-coded (green ≤40, yellow ≤60, red ≤80).
+# --------------------------------------------------------------------------- #
 def admin_hours(team):
-    """Unavoidable admin/coordination time each round (before building or learning)."""
-    return int(round(productive_hours(effort_hours(team)) * content.ADMIN_OVERHEAD_PCT))
+    """Unavoidable admin/overhead time this round — grows as the venture (round)
+    gets more complex."""
+    rnd = db.current_round()
+    return int(min(content.ADMIN_MAX_HOURS, content.ADMIN_BASE_HOURS + (rnd - 1) // 2))
 
 
-def round_hours_budget(team):
-    """Discretionary EFFECTIVE founder-hours for a round. The founder's raw effort is
-    converted to effective hours (diminishing past 40), then admin overhead and time
-    spent managing hires are removed. This is what building and training draw from."""
-    eff = productive_hours(effort_hours(team))
-    return max(0, eff - admin_hours(team) - management_hours(team["id"]))
+def build_budget(team):
+    """Hours the team has committed to business development (experiments) this round."""
+    b = team.get("build_budget")
+    return int(b) if b is not None else default_build(team)
+
+
+def current_effort(team):
+    """Total founder hours committed this round (the dynamic 'effort')."""
+    return int(admin_hours(team) + management_hours(team["id"]) + build_budget(team)
+               + (team.get("spent_train") or 0) + (team.get("spent_other") or 0))
+
+
+def effort_headroom(team):
+    """Founder hours still available before hitting the 80-hour cap."""
+    return max(0, content.MAX_WEEKLY_HOURS - current_effort(team))
+
+
+def max_build(team):
+    """Largest business-dev budget that keeps total effort within 80 hours."""
+    return max(0, content.MAX_WEEKLY_HOURS - admin_hours(team)
+               - int(management_hours(team["id"])) - int(team.get("spent_train") or 0)
+               - int(team.get("spent_other") or 0))
+
+
+def default_build(team):
+    """A sensible starting business-dev budget (keeps effort near the green line)."""
+    fixed = admin_hours(team) + int(management_hours(team["id"]))
+    return max(0, min(max_build(team), content.EFFORT_GREEN - fixed))
+
+
+def effort_color(effort):
+    """(css_color, emoji, label) for a total effort level."""
+    if effort <= content.EFFORT_GREEN:
+        return "#2b9d8f", "🟢", "sustainable"
+    if effort <= content.EFFORT_YELLOW:
+        return "#e0a000", "🟡", "stretched"
+    return "#d9534f", "🔴", "overwork"
+
+
+def set_build_budget(team_id, hours):
+    """Commit business-development hours this round (capped so effort ≤ 80)."""
+    team = db.get_team(team_id)
+    hours = int(max(0, min(max_build(team), hours)))
+    spent_b = int(team.get("spent_build") or 0)
+    db.update_team(team_id, build_budget=hours,
+                   founder_hours=max(0, hours - spent_b), hours_round=db.current_round())
+    db.set_ack(team_id, "time_plan_set")
 
 
 def sync_round_hours(team):
-    """Ensure a team's available hours match THIS round's budget. Resets once per
-    round (unused hours are lost) and clears the per-round usage counters. Robust to
-    migrations and marker gaps — the source of truth is the round the hours belong to."""
+    """Reset the round: default the business-dev budget, refill building hours, and
+    clear per-round usage counters (unused hours are lost). Runs once per round."""
     cur = db.current_round()
     if int(team.get("hours_round") or 0) != cur:
-        db.update_team(team["id"], founder_hours=round_hours_budget(team), hours_round=cur,
+        b = default_build(team)
+        db.update_team(team["id"], build_budget=b, founder_hours=b, hours_round=cur,
                        spent_build=0, spent_train=0, spent_other=0)
         return db.get_team(team["id"])
     return team
@@ -682,15 +704,14 @@ def _add_usage(team_id, field, hours):
 
 
 def hours_breakdown(team):
-    """Where the founder's productive week actually went this round, plus each hire's
-    own working hours. Returns [(label, hours)] that sums to the productive week."""
+    """The founder's committed week by task (sums to current effort), plus each
+    hire's own working hours. Returns [(label, hours)]."""
     cats = [
         ("Admin", admin_hours(team)),
         ("Managing hires", int(management_hours(team["id"]))),
-        ("Building (experiments)", int(team.get("spent_build") or 0)),
+        ("Business dev", build_budget(team)),
         ("Training", int(team.get("spent_train") or 0)),
         ("Hiring", int(team.get("spent_other") or 0)),
-        ("Available", int(team.get("founder_hours") or 0)),
     ]
     for h in db.list_hires(team["id"]):
         kind = "FT" if h["kind"] == "full_time" else "PT"
@@ -699,50 +720,13 @@ def hours_breakdown(team):
     return cats
 
 
-def set_effort(team_id, raw):
-    """Set how hard the founder works this week. Preserves hours already spent this
-    round (changing effort doesn't refill), then applies the new budget."""
-    raw = max(content.FULL_PRODUCTIVITY_HOURS, min(content.MAX_WEEKLY_HOURS, int(raw)))
-    team = db.get_team(team_id)
-    old_budget = round_hours_budget(team)
-    spent = max(0, old_budget - (team["founder_hours"] or 0))
-    db.update_team(team_id, effort_hours=raw)
-    team = db.get_team(team_id)
-    new_budget = round_hours_budget(team)
-    db.update_team(team_id, founder_hours=max(0, new_budget - spent),
-                   hours_round=db.current_round())
-    db.set_ack(team_id, "time_plan_set")
+# Legacy aliases kept so other modules/founder card keep working.
+def weekly_hours(team):
+    return current_effort(team)
 
 
-def get_build_pct(team):
-    v = team.get("build_pct")
-    return int(v) if v is not None else 60
-
-
-def set_build_pct(team_id, pct):
-    db.update_team(team_id, build_pct=int(max(0, min(100, pct))))
-    db.set_ack(team_id, "time_plan_set")
-
-
-def time_allocation(team):
-    """How the founder's productive week is used, plus each hire's working time.
-
-    Returns a list of (label, hours) suitable for a Pareto chart.
-    """
-    disc = round_hours_budget(team)          # discretionary pool this round
-    bpct = get_build_pct(team)
-    build = int(round(disc * bpct / 100))
-    learn = disc - build
-    cats = [
-        ("Building", build),
-        ("Learning", learn),
-        ("Managing", int(management_hours(team["id"]))),
-        ("Admin", admin_hours(team)),
-    ]
-    for h in db.list_hires(team["id"]):
-        kind = "FT" if h["kind"] == "full_time" else "PT"
-        cats.append((f"{kind} {h['role']}", int(content.HIRE_OPTIONS.get(h["kind"], {}).get("work_hours", 0))))
-    return cats
+def round_hours_budget(team):
+    return build_budget(team)
 
 
 # ---- Founder learning-by-doing --------------------------------------------- #
@@ -1002,11 +986,10 @@ def quick_setup_teams(n_teams, difficulty, opportunity_mode="distinct",
             founder_hours=preset["hours"], market_potential=preset["market_potential"],
             hours_per_round=preset["hours"],   # recommended weekly hours
         )
-        # start at the recommended effort with this week's effective hours available
+        # seed a default business-dev budget (effort starts near the green line)
         new_team = db.get_team_by_code(code)
-        db.update_team(new_team["id"], effort_hours=preset["hours"])
-        db.update_team(new_team["id"],
-                       founder_hours=round_hours_budget(db.get_team(new_team["id"])))
+        b = default_build(db.get_team(new_team["id"]))
+        db.update_team(new_team["id"], build_budget=b, founder_hours=b)
         created.append({"name": name, "code": code, "territory": territory})
     return created
 

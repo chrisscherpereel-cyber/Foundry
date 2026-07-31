@@ -392,50 +392,58 @@ def founder_skills(team):
     )
     team = logic.sync_round_hours(_refresh_team(team["id"]))
     cur = db.current_round()
-    effort = int(logic.effort_hours(team))
-    eff = logic.productive_hours(effort)
     admin = logic.admin_hours(team)
     mgmt = int(logic.management_hours(team["id"]))
-    used = int((team.get("spent_build") or 0) + (team.get("spent_train") or 0)
-               + (team.get("spent_other") or 0))
-    avail = int(team["founder_hours"])
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Hours available now", f"{avail}",
-              help="Effective hours left this round to spend on experiments (building) or "
-                   "training. Resets each round; unused hours are lost.")
-    m2.metric("This week's effort", f"{effort}h → {eff} eff.",
-              help="How hard the founder works (max 80h). Hours past 40 are half as productive.")
-    m3.metric("Used so far this round", f"{used} hrs",
-              help="Building + training + hiring time you've already spent this round.")
+    bbudget = logic.build_budget(team)
+    effort = logic.current_effort(team)
+    color, emoji, label = logic.effort_color(effort)
 
-    # ---- Effort control -----------------------------------------------------
-    st.divider()
+    # ---- Founder effort dashboard (dynamic, colour-coded) -------------------
     st.write("### ⏱️ Founder effort this week")
-    st.caption("Choose how hard the founder works. The first 40 hours are fully productive; each "
-               "hour up to 80 counts for half. Admin and managing hires come off the top — the "
-               "rest is yours to spend on building (experiments) or training, as you go.")
-    ec1, ec2 = st.columns([3, 1])
-    new_effort = ec1.slider(
-        "Founder effort (raw hours this week)", content.FULL_PRODUCTIVITY_HOURS,
-        content.MAX_WEEKLY_HOURS, effort, 5,
-        help="More effort = more effective hours, with diminishing returns past 40h.")
-    ec1.caption(f"{new_effort}h raw → **{logic.productive_hours(new_effort)} effective** "
-                f"(−{int(round(logic.productive_hours(new_effort)*content.ADMIN_OVERHEAD_PCT))} admin "
-                f"−{mgmt} managing = "
-                f"**{max(0, logic.productive_hours(new_effort) - int(round(logic.productive_hours(new_effort)*content.ADMIN_OVERHEAD_PCT)) - mgmt)} discretionary**).")
-    if ec2.button("Save effort", type="primary" if new_effort != effort else "secondary"):
-        logic.set_effort(team["id"], new_effort)
-        st.success("Effort saved. (Round-1 deliverable ✓)")
+    st.caption("You don't set effort directly — it's the **sum of the time you assign to tasks** "
+               "(admin + managing + business development + training + hiring). Admin grows as the "
+               "venture gets more complex, and managing hires costs time too. Keep total effort "
+               "under 80 hours — green ≤40 (sustainable), yellow ≤60 (stretched), red ≤80 (overwork).")
+    bar = min(1.0, effort / content.MAX_WEEKLY_HOURS)
+    st.markdown(
+        f"<div style='font-size:15px;margin:2px 0'>{emoji} <b>Founder effort: "
+        f"<span style='color:{color}'>{effort} / 80 hrs</span></b> — {label}</div>"
+        f"<div style='background:#e9edf5;border-radius:6px;height:14px;overflow:hidden'>"
+        f"<div style='width:{bar*100:.0f}%;background:{color};height:14px'></div></div>",
+        unsafe_allow_html=True)
+    st.caption(f"Fixed this round: Admin **{admin}h** · Managing hires **{mgmt}h**  →  "
+               f"you're assigning **{bbudget}h** to business development and "
+               f"**{int(team.get('spent_train') or 0)}h** to training so far.")
+
+    # ---- Assign time: Business development ----------------------------------
+    st.divider()
+    st.write("### 🧭 Assign the founder's time")
+    st.caption("Set how many hours go to business development (customer discovery & experiments). "
+               "Training is assigned per skill below. Everything counts toward the 80-hour effort cap.")
+    maxb = logic.max_build(team)
+    bc1, bc2 = st.columns([3, 1])
+    new_b = bc1.slider("Business development hours (for experiments this round)",
+                       int(team.get("spent_build") or 0), max(int(team.get("spent_build") or 0), maxb),
+                       bbudget, 1,
+                       help="Hours reserved for the Experiment Marketplace this round. Can't go "
+                            "below what you've already spent, or push effort over 80h.")
+    proj = admin + mgmt + new_b + int(team.get("spent_train") or 0) + int(team.get("spent_other") or 0)
+    pc, pe, pl = logic.effort_color(proj)
+    bc1.markdown(f"<span style='color:{pc}'>{pe} Projected effort with this budget: "
+                 f"<b>{proj}/80h</b> ({pl})</span>", unsafe_allow_html=True)
+    if bc2.button("Save budget", type="primary" if new_b != bbudget else "secondary"):
+        logic.set_build_budget(team["id"], new_b)
+        st.success("Business-dev budget saved. (Round-1 deliverable ✓)")
         st.rerun()
+    st.caption(f"Business-dev hours remaining to spend on experiments: **{int(team['founder_hours'])}h**.")
     salary = sum((h["per_round"] or 0) for h in db.list_hires(team["id"]))
     if salary:
-        ec1.caption(f"💸 Specialist salaries: **${salary:,.0f}/round** (from capital).")
+        st.caption(f"💸 Specialist salaries: **${salary:,.0f}/round** (from capital).")
 
-    # ---- Where the hours actually went (Pareto) -----------------------------
+    # ---- Pareto of the founder & team week ----------------------------------
     _pareto_time_chart(logic.hours_breakdown(team))
-    st.caption("This shows where the founder & team's hours **actually** go this round — it "
-               "updates as you buy experiments, train, or hire. Spend deliberately; unused hours "
-               "are lost when the round advances.")
+    st.caption("Where the founder & team's committed hours go this round — it updates as you set "
+               "the budget, train, or hire. Unused business-dev hours are lost when the round advances.")
 
     skills = db.get_team_skills(team["id"])
     boosts = logic.hire_boost(team["id"])
@@ -446,11 +454,12 @@ def founder_skills(team):
         st.info(f"🎯 **This round leans on:** {need_names}. If your effective level is low there, "
                 "consider training or hiring.")
 
-    st.write("### Your team's skills")
-    st.caption("Train by investing founder-hours — partial effort is **banked as progress**, so "
-               "8 of 10 hours carries over and you finish the level next round. Founders also "
-               "learn by doing: completing a round grows the skills it used.")
-    avail = int(team["founder_hours"])
+    st.write("### Assign training time to skills")
+    room = logic.effort_headroom(team)
+    st.caption(f"Assign hours to train a skill — this counts toward the 80-hour effort cap "
+               f"(**{room}h of effort left** this week). The default is a full level, but you can "
+               "assign less: partial hours are **banked** and finish the level in a later round. "
+               "Early levels are cheaper; higher levels cost more. Founders also learn by doing.")
     for s in content.FOUNDER_SKILLS:
         base = skills.get(s["key"], 0)
         boost = boosts.get(s["key"], 0)
@@ -470,20 +479,22 @@ def founder_skills(team):
             c1.caption(f"_{s['definition']}_")
             c1.caption(f"Effect: {s['effect']}  ·  Supports **{s['dimension']}**.")
             if base < content.SKILL_MAX:
-                c1.caption(f"📚 Training progress to next level: **{xp}/{nxt} hrs** banked.")
+                c1.caption(f"📚 Progress to next level: **{xp}/{nxt} hrs** banked "
+                           f"(a full level = {nxt}h).")
             if gap:
-                c1.caption("⚠️ Needed this round but weak — invest time or hire in.")
-            # Invest / undo controls
+                c1.caption("⚠️ Needed this round but weak — assign time or hire in.")
+            # Assign training / undo controls
             if base >= content.SKILL_MAX:
                 c2.success("Maxed")
             else:
-                remaining = max(1, nxt - xp)
-                default = min(remaining, avail) if avail > 0 else 0
-                hrs = c2.number_input("Invest hrs", 0, max(0, avail), int(default),
+                remaining = max(0, nxt - xp)                 # hours to finish this level
+                cap = min(remaining, room)                   # can't exceed level or effort room
+                default = cap
+                hrs = c2.number_input("Assign hrs", 0, max(0, cap), int(default),
                                       key=f"inv_{s['key']}", label_visibility="collapsed",
-                                      help=f"Hours to invest now (you have {avail}). "
-                                           f"{remaining} more hrs finishes this level.")
-                if c2.button("Train", key=f"train_{s['key']}", disabled=(avail <= 0)):
+                                      help=f"Hours to assign now. {remaining}h finishes this level; "
+                                           f"{room}h of effort left this week.")
+                if c2.button("Train", key=f"train_{s['key']}", disabled=(room <= 0)):
                     ok, msg = logic.invest_training(team["id"], s["key"], hrs)
                     (st.success if ok else st.error)(msg)
                     st.rerun()
@@ -670,8 +681,8 @@ def founder_opportunity(team):
                 ("🛠 Skills", card.get("skills", "—"), "skills"),
                 ("🔗 Networks", card.get("networks", "—"), "networks"),
                 ("💵 Budget you can afford to lose", f"${card.get('budget','—')}", "budget"),
-                ("⏳ Founder-time per week", f"{logic.weekly_hours(team):.0f} hrs "
-                 f"(≈{logic.productive_hours(logic.weekly_hours(team))} productive)", "hours"),
+                ("⏳ Founder-time this week", f"{logic.current_effort(team)}h effort "
+                 f"(cap 80h — set by your task allocation)", "hours"),
                 ("🎲 Risk tolerance", card.get("risk", "—"), "risk"),
                 ("⚖️ Ethical boundary", card.get("ethics", "—"), "ethics"),
             ]

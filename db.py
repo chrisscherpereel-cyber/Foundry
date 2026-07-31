@@ -322,6 +322,7 @@ def init_db():
         _ensure_column(conn, "teams", "build_pct", "INTEGER DEFAULT 60")
         _ensure_column(conn, "teams", "effort_hours", "REAL DEFAULT 60")
         _ensure_column(conn, "teams", "hours_round", "INTEGER DEFAULT 0")
+        _ensure_column(conn, "teams", "build_budget", "REAL DEFAULT 34")
         _ensure_column(conn, "teams", "spent_build", "REAL DEFAULT 0")
         _ensure_column(conn, "teams", "spent_train", "REAL DEFAULT 0")
         _ensure_column(conn, "teams", "spent_other", "REAL DEFAULT 0")

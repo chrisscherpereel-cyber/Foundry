@@ -225,9 +225,13 @@ HIRE_OPTIONS = {
 }
 HIRE_SKILL_CAP = 5   # effective skill (founder + hires) can't exceed this
 
-# Share of the founder's productive week eaten by unavoidable admin/coordination
-# (email, logistics, running the business) before any building or learning.
-ADMIN_OVERHEAD_PCT = 0.20
+# Founder effort model. Effort (total committed hours) = admin + managing + business
+# dev + training + hiring, hard-capped at MAX_WEEKLY_HOURS and colour-coded by zone.
+ADMIN_BASE_HOURS = 8       # unavoidable admin in round 1
+ADMIN_MAX_HOURS = 18       # admin grows with rounds but caps here
+EFFORT_GREEN = 40          # 0–40h: sustainable (green)
+EFFORT_YELLOW = 60         # 40–60h: stretched (yellow); 60–80h: overwork (red)
+ADMIN_OVERHEAD_PCT = 0.20  # (legacy; retained for compatibility)
 
 # Which founder skills each stage/topic leans on most (drives hiring hints).
 TOPIC_SKILL_NEEDS = {
