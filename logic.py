@@ -216,6 +216,44 @@ def canvas_focus_for_round(rnd):
     return focuses
 
 
+def _total_rounds():
+    sched = get_schedule()
+    return max((row["round"] for row in sched), default=1)
+
+
+def active_rounds_for_page(page):
+    """Every round in which a tool is the active task (ignores carried-over work)."""
+    return [r for r in range(1, _total_rounds() + 1)
+            if page in active_tools(r, team_id=None)]
+
+
+def active_rounds_for_canvas(ctype):
+    """Every round in which a specific canvas is in focus."""
+    return [r for r in range(1, _total_rounds() + 1)
+            if ctype in canvas_focus_for_round(r)]
+
+
+def rounds_for_topic(topic_key):
+    """Every round whose material includes a given curriculum topic key."""
+    out = []
+    for row in get_schedule():
+        if any(tp.get("key") == topic_key for tp in row["topics"]):
+            out.append(row["round"])
+    return out
+
+
+def rounds_phrase(rounds):
+    """Human phrase for a list of round numbers: 'Round 3', 'Rounds 3 and 5', etc."""
+    rounds = sorted(set(rounds))
+    if not rounds:
+        return "a later round"
+    if len(rounds) == 1:
+        return f"Round {rounds[0]}"
+    if len(rounds) == 2:
+        return f"Rounds {rounds[0]} and {rounds[1]}"
+    return "Rounds " + ", ".join(str(r) for r in rounds[:-1]) + f", and {rounds[-1]}"
+
+
 # --------------------------------------------------------------------------- #
 # Round deliverables, completion, and tool gating
 # --------------------------------------------------------------------------- #
@@ -990,6 +1028,7 @@ def quick_setup_teams(n_teams, difficulty, opportunity_mode="distinct",
         new_team = db.get_team_by_code(code)
         b = default_build(db.get_team(new_team["id"]))
         db.update_team(new_team["id"], build_budget=b, founder_hours=b)
+        send_welcome(new_team["id"])   # Round-1 welcome + subtle hints in the Inbox
         created.append({"name": name, "code": code, "territory": territory})
     return created
 
@@ -1412,6 +1451,13 @@ def generate_feedback(team_id, round_no=None, scores=None):
         lines.append(f"Market watch ({e['category']}): {e['text']} "
                      f"This pressures the assumption: {e['exposes']}")
 
+    hints = round_hints(rnd)
+    if hints:
+        lines.append("")
+        lines.append(f"**To do well in Round {rnd}:**")
+        for h in hints:
+            lines.append(f"  • {h}")
+
     lines.append("")
     lines.append("— The Venture Foundry Director")
     return {"subject": f"Round {rnd} venture review — {team['name']}",
@@ -1422,6 +1468,84 @@ def send_feedback(team_id, round_no=None, scores=None):
     fb = generate_feedback(team_id, round_no, scores)
     db.add_message(team_id, fb["subject"], fb["body"], round_no or db.current_round())
     return fb
+
+
+# ---- Round hints & the welcome email --------------------------------------- #
+def round_hints(rnd):
+    """Subtle 'how to do well' hints for the topics scheduled in a round."""
+    out = []
+    for tp in topics_for_round(rnd):
+        h = content.round_hint(tp["key"])
+        if h and h not in out:
+            out.append(h)
+    return out
+
+
+def founder_tailored_hints(team_id):
+    """A few hints tailored to the team's founder card — strengths to lean on and
+    gaps to watch."""
+    card = db.get_founder_card(team_id)
+    levels = content.card_skill_levels(card.get("name", ""))
+    lines = []
+    if levels:
+        strong = max(levels, key=levels.get)
+        weak = min(levels, key=levels.get)
+        if levels[strong] >= 3:
+            s = content.FOUNDER_SKILL_BY_KEY[strong]
+            lines.append(f"You're strong in **{s['name']}** — lean on it; it lifts your "
+                         f"{s['dimension']}.")
+        if levels[weak] <= 1:
+            w = content.FOUNDER_SKILL_BY_KEY[weak]
+            lines.append(f"You're thin on **{w['name']}** — plan to train it, or hire a "
+                         f"{content.SPECIALIST_ROLES.get(weak,'specialist')} when a round leans on it.")
+    if card.get("networks"):
+        lines.append(f"Your network into {card['networks']} is a head start — begin customer "
+                     "discovery with people you can already reach.")
+    if card.get("budget"):
+        lines.append(f"You can afford to lose ${card['budget']} — spend it on the cheapest tests "
+                     "that produce the strongest evidence, not on polish.")
+    return lines
+
+
+def generate_welcome(team_id):
+    """A warm Round-1 welcome email with founder- and territory-tailored, subtle hints."""
+    team = db.get_team(team_id)
+    territory = team["opportunity"] or "your opportunity territory"
+    lines = [f"Welcome to Venture Foundry, {team['name']}! 🏭", "",
+             "You've been accepted into the accelerator as founders — not with a finished "
+             "product, but with an opportunity and a team. Here's the one rule that shapes "
+             "everything: you earn resources by producing **credible evidence** that your "
+             "business model could work, not by having a good idea or a polished pitch.", ""]
+    lines.append(f"**Your opportunity:** {territory}.")
+    guide = content.territory_guide(territory)
+    if guide:
+        lines.append("")
+        lines.append("Getting started here — a map, not the answer (go let real customers redraw it):")
+        lines.append(guide)
+    lines.append("")
+    lines.append("**Your founding team.** Read your founder card closely — it's your real "
+                 "advantage and your real constraint:")
+    for h in founder_tailored_hints(team_id):
+        lines.append(f"  • {h}")
+    lines.append("")
+    hints = round_hints(db.current_round()) or round_hints(1)
+    lines.append("**This round, to get off to a strong start:**")
+    for h in hints:
+        lines.append(f"  • {h}")
+    lines.append("")
+    lines.append("Set a sustainable time allocation on **Founder & Team**, review your card and "
+                 "territory on **Founder & Opportunity**, and check your **Round Briefing** for "
+                 "this round's tasks. Good luck — build the evidence.")
+    lines.append("")
+    lines.append("— The Venture Foundry Director")
+    return {"subject": f"Welcome to Venture Foundry — {team['name']}",
+            "body": "\n".join(lines)}
+
+
+def send_welcome(team_id):
+    w = generate_welcome(team_id)
+    db.add_message(team_id, w["subject"], w["body"], 1)
+    return w
 
 
 # ---- Automation settings & batch run -------------------------------------- #

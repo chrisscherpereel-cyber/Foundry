@@ -133,10 +133,12 @@ def _round_gate(page, team):
         st.stop()
     editable = logic.tool_editable(page, rnd, team["id"])
     if state == "reference" and not editable:
-        st.info("👁️ **Reference only this round.** This tool isn't part of the current round's "
-                "task, so editing is disabled to keep everyone focused. Your existing work is "
-                "shown below and carries forward. (Your instructor can re-enable edits by "
-                "turning off Strict round mode.)")
+        opens = logic.active_rounds_for_page(page)
+        when = logic.rounds_phrase(opens) if opens else "a later round"
+        st.info(f"👁️ **Reference only right now.** Under Strict round mode this tool is part of "
+                f"**{when}**, so input is disabled here to keep everyone on the same page. Your "
+                f"existing work is shown below and carries forward. (Your instructor can allow "
+                f"edits any time by turning off Strict round mode.)")
     elif state == "active":
         _page_requirements(page, team)
     return editable
@@ -697,12 +699,8 @@ def founder_opportunity(team):
         st.caption("The Director has not yet assigned a founder card.")
 
     st.write(f"### Opportunity territory\n**{team['opportunity'] or '—'}**")
-    _guide_terr = content.territory_guide(team["opportunity"] or "")
-    if _guide_terr:
-        with st.expander("💡 Getting started in this territory", expanded=True):
-            st.markdown(_guide_terr)
-            st.caption("This is a starting map, not the answer — go find real customers and let "
-                       "the evidence redraw it.")
+    st.caption("📬 Your welcome email in the **Inbox** maps out how to get started in this "
+               "territory and how to make a strong first round.")
 
     st.divider()
     if db.has_ack(team["id"], "founder_review"):
@@ -724,10 +722,11 @@ def founder_opportunity(team):
                        for d in logic.outstanding_prior(team["id"], _cur))
     ventures_editable = editable and (not logic.strict_round_mode() or _opp_now or _opp_carried)
     if not ventures_editable:
-        _opp_round = logic.page_unlock_round("Founder & Opportunity")  # base tool = 1
-        st.info("🔒 Generating and scoring 3+ ventures is the **Opportunity framing** task — it "
-                "opens in that round. For now this is view-only. (Your instructor can allow early "
-                "edits by turning off Strict round mode.)")
+        _opp_rounds = logic.rounds_for_topic("opportunity_framing")
+        _opp_when = logic.rounds_phrase(_opp_rounds) if _opp_rounds else "the Opportunity-framing round"
+        st.info(f"🔒 Generating and scoring 3+ ventures is the **Opportunity framing** task — it "
+                f"opens in **{_opp_when}**. For now it's view-only (input disabled). Your instructor "
+                f"can allow early edits by turning off Strict round mode.")
     else:
         st.caption("Generate at least three ventures and score each — comparing options "
                    "deliberately is a constrained decision, not free brainstorming.")
@@ -741,12 +740,14 @@ def founder_opportunity(team):
             st.write(f"**Evidence availability:** {v.get('evidence','—')}/5")
             st.write(f"**Experiment affordability:** {v.get('afford','—')}/5")
             st.write(f"**Notes:** {v.get('notes','')}")
-            if st.button("Remove", key=f"rmv_{i}", disabled=not ventures_editable,
-                         help="Delete this candidate venture."):
+            if ventures_editable and st.button(
+                    "Remove", key=f"rmv_{i}", help="Delete this candidate venture."):
                 ventures.pop(i)
                 db.set_ventures(team["id"], ventures)
                 st.rerun()
 
+    if not ventures_editable:
+        return
     with st.form("add_venture", clear_on_submit=True):
         st.write("**Add a candidate venture**")
         name = st.text_input(
@@ -988,11 +989,14 @@ def canvases(team):
     # Per-canvas editability: under strict mode a canvas is editable only in its round.
     canvas_ok = logic.canvas_editable(ctype, cur, team["id"]) and editable
     unlock = logic.canvas_unlock_round(ctype)
+    _focus_rounds = logic.active_rounds_for_canvas(ctype)
+    _focus_when = logic.rounds_phrase(_focus_rounds) if _focus_rounds else f"Round {unlock}"
     if cur < unlock:
-        st.warning(f"🔒 The {title} is introduced in **Round {unlock}**. It's view-only until then.")
+        st.warning(f"🔒 The {title} is introduced in **Round {unlock}**. It's view-only "
+                   f"(input disabled) until then.")
     elif not canvas_ok and editable:
-        st.info(f"👁️ The {title} belongs to a different round, so it's view-only now "
-                f"(its round is R{unlock}). Your saved versions are shown below.")
+        st.info(f"👁️ The {title} is the focus in **{_focus_when}**, not this round, so its "
+                f"input is disabled now. Your saved versions are shown below and carry forward.")
 
     _canvas_diagram(ctype)
     st.caption(_CANVAS_HELP[ctype])
@@ -1007,29 +1011,35 @@ def canvases(team):
     if existing:
         st.caption(f"{len(existing)} version(s) saved. Editing starts from the latest.")
 
-    with st.form(f"canvas_{ctype}", clear_on_submit=False):
-        if ctype == "customer_profile":
-            data = _customer_profile_layout(ctype, val)
-        elif ctype == "vpc":
-            data = _vpc_layout(ctype, val)
-        elif ctype == "environment":
-            data = _environment_layout(ctype, val)
-        else:
-            data = _bmc_layout(ctype, val)
+    if canvas_ok:
+        with st.form(f"canvas_{ctype}", clear_on_submit=False):
+            if ctype == "customer_profile":
+                data = _customer_profile_layout(ctype, val)
+            elif ctype == "vpc":
+                data = _vpc_layout(ctype, val)
+            elif ctype == "environment":
+                data = _environment_layout(ctype, val)
+            else:
+                data = _bmc_layout(ctype, val)
 
-        st.divider()
-        vlabel = st.text_input(
-            "Version label (optional)", value=f"{title} v{len(existing)+1}",
-            help="A name for this snapshot, e.g. 'after 5 interviews'. Auto-filled for you.")
-        note = st.text_input(
-            "What changed / why (evidence-driven?)",
-            help="One line on what you changed and what evidence prompted it. This is graded — "
-                 "it shows your thinking evolved for a reason.")
-        if st.form_submit_button(f"Save new {title} version", disabled=not canvas_ok,
-                                 help="Store the current boxes as a new dated version."):
-            v = db.save_canvas(team["id"], ctype, data, vlabel, note)
-            st.success(f"Saved {title} version {v}.")
-            st.rerun()
+            st.divider()
+            vlabel = st.text_input(
+                "Version label (optional)", value=f"{title} v{len(existing)+1}",
+                help="A name for this snapshot, e.g. 'after 5 interviews'. Auto-filled for you.")
+            note = st.text_input(
+                "What changed / why (evidence-driven?)",
+                help="One line on what you changed and what evidence prompted it. This is graded — "
+                     "it shows your thinking evolved for a reason.")
+            if st.form_submit_button(f"Save new {title} version",
+                                     help="Store the current boxes as a new dated version."):
+                v = db.save_canvas(team["id"], ctype, data, vlabel, note)
+                st.success(f"Saved {title} version {v}.")
+                st.rerun()
+    elif latest:
+        st.caption("Latest saved version (read-only this round):")
+        for key, label, _ in blocks:
+            st.markdown(f"**{label}**")
+            st.write(latest["data"].get(key) or "_(empty)_")
 
     if existing:
         st.divider()
@@ -1070,33 +1080,34 @@ def assumptions(team):
         ],
     )
 
-    with st.form("add_assumption", clear_on_submit=True):
-        text = st.text_input(
-            "Assumption (state it as something that must be true)",
-            placeholder="Customers will pay at least $20/month for this.",
-            help="Phrase it as a testable claim. Good: 'Coffee shops will pay $49/mo.' "
-                 "Bad: 'Pricing.'")
-        c1, c2, c3, c4 = st.columns(4)
-        risk = c1.selectbox(
-            "Risk type", content.RISK_TYPES,
-            help="Which kind of risk is this? Desirability = do they want it; Feasibility = "
-                 "can we build it; Viability = does the money work; Adaptability = will it last.")
-        importance = c2.slider(
-            "Importance", 1, 5, 3,
-            help="If this assumption is FALSE, how badly is the venture hurt? "
-                 "5 = the whole venture collapses.")
-        evidence_level = c3.slider(
-            "Existing evidence", 1, 5, 1,
-            help="How much solid evidence do you already have for this? "
-                 "1 = only a hunch, 5 = strong proof.")
-        testability = c4.slider(
-            "Testability", 1, 5, 3,
-            help="How easily can you test this cheaply and quickly? 5 = very easy to test.")
-        if st.form_submit_button("Add assumption", disabled=not editable,
-                                 help="Save this assumption to your map.") and text:
-            db.add_assumption(team["id"], text, risk, importance, evidence_level, testability)
-            st.success("Assumption added.")
-            st.rerun()
+    if editable:
+        with st.form("add_assumption", clear_on_submit=True):
+            text = st.text_input(
+                "Assumption (state it as something that must be true)",
+                placeholder="Customers will pay at least $20/month for this.",
+                help="Phrase it as a testable claim. Good: 'Coffee shops will pay $49/mo.' "
+                     "Bad: 'Pricing.'")
+            c1, c2, c3, c4 = st.columns(4)
+            risk = c1.selectbox(
+                "Risk type", content.RISK_TYPES,
+                help="Which kind of risk is this? Desirability = do they want it; Feasibility = "
+                     "can we build it; Viability = does the money work; Adaptability = will it last.")
+            importance = c2.slider(
+                "Importance", 1, 5, 3,
+                help="If this assumption is FALSE, how badly is the venture hurt? "
+                     "5 = the whole venture collapses.")
+            evidence_level = c3.slider(
+                "Existing evidence", 1, 5, 1,
+                help="How much solid evidence do you already have for this? "
+                     "1 = only a hunch, 5 = strong proof.")
+            testability = c4.slider(
+                "Testability", 1, 5, 3,
+                help="How easily can you test this cheaply and quickly? 5 = very easy to test.")
+            if st.form_submit_button("Add assumption",
+                                     help="Save this assumption to your map.") and text:
+                db.add_assumption(team["id"], text, risk, importance, evidence_level, testability)
+                st.success("Assumption added.")
+                st.rerun()
 
     assums = db.list_assumptions(team["id"])
     if not assums:
@@ -1119,20 +1130,21 @@ def assumptions(team):
             new_status = st.selectbox(
                 "Status", ["Untested", "Testing", "Supported", "Refuted", "Ignored"],
                 index=["Untested", "Testing", "Supported", "Refuted", "Ignored"].index(a["status"]),
-                key=f"astatus_{a['id']}",
+                key=f"astatus_{a['id']}", disabled=not editable,
                 help="Untested = no evidence yet; Testing = experiment running; "
                      "Supported/Refuted = evidence came back; Ignored = you chose not to test "
                      "(risky if it's important).",
             )
-            cc1, cc2 = st.columns(2)
-            if cc1.button("Update status", key=f"aupd_{a['id']}", disabled=not editable,
-                          help="Save the status you selected."):
-                db.update_assumption(a["id"], status=new_status)
-                st.rerun()
-            if cc2.button("Delete", key=f"adel_{a['id']}", disabled=not editable,
-                          help="Remove this assumption."):
-                db.delete_assumption(a["id"])
-                st.rerun()
+            if editable:
+                cc1, cc2 = st.columns(2)
+                if cc1.button("Update status", key=f"aupd_{a['id']}",
+                              help="Save the status you selected."):
+                    db.update_assumption(a["id"], status=new_status)
+                    st.rerun()
+                if cc2.button("Delete", key=f"adel_{a['id']}",
+                              help="Remove this assumption."):
+                    db.delete_assumption(a["id"])
+                    st.rerun()
 
 
 # --------------------------------------------------------------------------- #
@@ -1172,7 +1184,7 @@ def experiments(team):
 
     st.write("### Buy & design an experiment")
     card_name = st.selectbox(
-        "Experiment card", [c["name"] for c in content.EXPERIMENT_CARDS],
+        "Experiment card", [c["name"] for c in content.EXPERIMENT_CARDS], disabled=not editable,
         help="Each card is a different way to test a belief. Cheaper cards give weaker "
              "evidence; behavior-based cards (preorder, letter of intent) give the strongest.")
     card = content.EXPERIMENT_CARD_MAP[card_name]
@@ -1185,7 +1197,8 @@ def experiments(team):
     st.caption(f"Best for **{card['suits']}** assumptions · Min sample: {card['sample']} · "
                f"Watch for bias: {card['bias']}")
 
-    with st.form("buy_experiment", clear_on_submit=True):
+    if editable:
+      with st.form("buy_experiment", clear_on_submit=True):
         if assums:
             assum_id = st.selectbox(
                 "Assumption tested",
@@ -1214,7 +1227,7 @@ def experiments(team):
             placeholder="If supported, build clickable prototype; if refuted, revisit segment",
             help="What you will actually DO depending on the outcome.")
         submitted = st.form_submit_button(
-            "Purchase & design experiment", disabled=not editable,
+            "Purchase & design experiment",
             help="Deducts the cost and saves the experiment. The assumption becomes 'Testing.'")
         if submitted:
             if assum_id is None:
@@ -1245,6 +1258,9 @@ def experiments(team):
             st.write(f"**Decision rule:** {e['decision_rule']}")
             st.write(f"**Cost:** ${e['cost_money']} · {e['cost_time']}h · {e['cost_credits']} credits · "
                      f"strength {e['evidence_strength']}/10")
+            if not editable:
+                st.write(f"**Result:** {e['result'] or '_(not recorded)_'}")
+                continue
             result = st.text_area(
                 "Record result", value=e["result"] or "", key=f"res_{e['id']}",
                 help="What actually happened? Enter the measured numbers and what you observed.")
@@ -1254,7 +1270,7 @@ def experiments(team):
                 key=f"outc_{e['id']}",
                 help="Compare the result to your thresholds. Supported/Refuted will auto-update "
                      "the linked assumption. Inconclusive = the test didn't settle it.")
-            if st.button("Save result", key=f"saveres_{e['id']}", disabled=not editable,
+            if st.button("Save result", key=f"saveres_{e['id']}",
                          help="Store the result and update the linked assumption."):
                 db.update_experiment(e["id"], result=result, outcome=outcome)
                 if e["assumption_id"] and outcome in ("Supported", "Refuted"):
@@ -1294,7 +1310,8 @@ def evidence(team):
         st.table([{"Evidence": lbl, "Value (0–10)": val} for lbl, val in content.EVIDENCE_LADDER])
 
     assums = db.list_assumptions(team["id"])
-    with st.form("add_evidence", clear_on_submit=True):
+    if editable:
+      with st.form("add_evidence", clear_on_submit=True):
         description = st.text_input(
             "What did you learn? (one line)",
             placeholder="3 of 5 shop owners asked to join a paid pilot.",
@@ -1315,7 +1332,7 @@ def evidence(team):
         else:
             assum_id = None
         if st.form_submit_button(
-                "Log evidence", disabled=not editable,
+                "Log evidence",
                 help="Records the evidence and pays you credits equal to its strength.") and description:
             award, strength = logic.log_evidence_and_award(
                 team["id"], description, etype, source, assum_id)
@@ -1371,6 +1388,28 @@ def vp_auction(team):
     )
 
     props = db.list_value_props(team["id"])
+
+    if not editable:
+        # Reference-only this round: show existing work read-only, no inputs.
+        st.write("### Your value propositions")
+        if props:
+            for p in props:
+                st.write(f"- **{p['name']}** · evidence {p['evidence_strength']}/10 · "
+                         f"{p['tokens']} tokens")
+        else:
+            st.caption("No value propositions logged yet.")
+        results = db.list_vp_results(team["id"])
+        if results:
+            st.divider()
+            st.write("### Auction history")
+            st.dataframe(
+                [{"When": r["created_at"], "Round": r["round"], "Tokens": r["total_tokens"],
+                  "Alignment": r["alignment"], "Prev": r["prev_alignment"],
+                  "Tax": r["tax"], "Dividend": r["dividend"], "Net": r["net_credits"]}
+                 for r in results],
+                use_container_width=True, hide_index=True,
+            )
+        return
 
     # ---- Manage propositions -------------------------------------------------
     st.write("### Your value propositions")
@@ -1532,7 +1571,8 @@ def pivots(team):
         ],
     )
 
-    with st.form("pivot_form", clear_on_submit=True):
+    if editable:
+      with st.form("pivot_form", clear_on_submit=True):
         original = st.text_area(
             "Original assumption",
             help="The belief you built on that the evidence has now undermined.")
@@ -1554,7 +1594,7 @@ def pivots(team):
         needed = st.text_area(
             "Evidence required to support the new direction",
             help="What evidence would prove the new direction works?")
-        if st.form_submit_button("Submit pivot petition", disabled=not editable,
+        if st.form_submit_button("Submit pivot petition",
                                  help="Send this to the investment committee for a decision."):
             if not original or not change:
                 st.error("Original assumption and proposed change are required.")

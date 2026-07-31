@@ -334,6 +334,62 @@ def territory_guide(territory):
     return TERRITORY_GUIDE.get(territory)
 
 
+# Subtle "how to do well" hints per curriculum topic, woven into each round's email.
+ROUND_HINTS = {
+    "founder_formation":
+        "Play to your founder card's strengths and be honest about its gaps — the strongest "
+        "ventures fit who you are. Skim the tools, but this week just confirm your review and set "
+        "a sustainable time allocation (green effort beats burning out).",
+    "opportunity_framing":
+        "Don't fall for the first idea. Generate several and compare them on customer importance "
+        "AND founder-fit — how easily you can reach customers and afford to test matters as much "
+        "as how exciting the idea sounds.",
+    "customer_discovery":
+        "Ask people about the last time they faced the problem, not what they'd hypothetically do. "
+        "Log what they actually DID — behavioral evidence is worth far more than 'sounds good.'",
+    "customer_evidence":
+        "Look for patterns across your interviews and revise the Customer Profile from real "
+        "findings. Flag the beliefs you still can't support — those are your riskiest spots.",
+    "value_creation":
+        "Sketch more than one value proposition and tie each pain reliever / gain creator to a "
+        "specific customer pain or gain. Avoid marrying your first solution.",
+    "value_prop_fit":
+        "In the auction, back the proposition your evidence supports — not the one you love most. "
+        "Redirecting toward evidence earns you a learning dividend; over-betting on a hunch is taxed.",
+    "bmc_architecture":
+        "Fill all nine blocks and check they reinforce each other. When a market event breaks one "
+        "block, adjust the others so the model stays coherent.",
+    "assumption_testing":
+        "Rank assumptions by importance × how little evidence you have, and mark the ones that "
+        "could kill the venture. An untested high-risk assumption is the fastest way to lose ground.",
+    "experiment_design":
+        "Write success and failure thresholds BEFORE you run a test, and spend on the cheapest "
+        "experiment that yields the strongest evidence — learning per dollar is what counts.",
+    "market_testing":
+        "Run the test, record honest results, and update each assumption to Supported or Refuted — "
+        "then log the resulting evidence to earn credits.",
+    "pivot_decisions":
+        "A pivot is a disciplined response to evidence, not frustration. If the evidence warrants "
+        "it, file a clear pivot petition and save a new BMC version; if not, persevere on purpose.",
+    "business_economics":
+        "Test willingness to pay with real behavior — a preorder or letter of intent beats a "
+        "survey — and check the per-customer math (price, cost, margin) actually works.",
+    "scaling":
+        "Shore up your channels, partners, and defensibility, and scan the environment (trends and "
+        "disruptive forces) for what could threaten the model as you grow.",
+    "investment_readiness":
+        "Assemble a tight evidence narrative: what you know, how you know it, and what's still an "
+        "assumption. Investors probe the gaps, so name them before they do.",
+    "venture_market":
+        "Lead with your single strongest piece of evidence, be honest about remaining uncertainty, "
+        "and propose the next experiment you'd run — that candor builds investor confidence.",
+}
+
+
+def round_hint(topic_key):
+    return ROUND_HINTS.get(topic_key, "")
+
+
 # --------------------------------------------------------------------------- #
 # Evidence-strength ladder — behavior beats opinion
 # --------------------------------------------------------------------------- #

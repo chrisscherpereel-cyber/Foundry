@@ -638,6 +638,10 @@ def team_setup():
         if st.form_submit_button("Create team",
                                  help="Create the team and generate its join code.") and name:
             code = db.create_team(name, opportunity, card, capital, credits, hours, potential)
+            new_team = db.get_team_by_code(code)
+            b = logic.default_build(db.get_team(new_team["id"]))
+            db.update_team(new_team["id"], build_budget=b, founder_hours=b)
+            logic.send_welcome(new_team["id"])   # Round-1 welcome + hints in the Inbox
             st.success(f"Team '{name}' created. Join code: **{code}** — give this to the students.")
             st.rerun()
 
@@ -673,6 +677,29 @@ def team_setup():
                          help="Permanently remove this team and all its data."):
                 db.delete_team(t["id"])
                 st.rerun()
+
+            # ---- Round-1 welcome email — preview, edit before students see it ----
+            st.markdown("**Welcome email (Round-1 onboarding)**")
+            st.caption("Auto-written from this team's founder card, territory, and Round-1 "
+                       "hints. Preview and tweak the wording before it lands in their Inbox.")
+            wsent = any("Welcome" in m["subject"] for m in db.list_messages(t["id"]))
+            wel = logic.generate_welcome(t["id"])
+            with st.popover("Preview / edit welcome email"):
+                wsubj = st.text_input("Subject", value=wel["subject"], key=f"wel_subj_{t['id']}")
+                wbody = st.text_area("Body", value=wel["body"], height=340,
+                                     key=f"wel_body_{t['id']}")
+                st.caption("Preview:")
+                st.markdown(wbody)
+                if st.button("Send this welcome to the team Inbox", key=f"wel_send_{t['id']}"):
+                    db.add_message(t["id"], wsubj, wbody, 1)
+                    st.success("Welcome email sent.")
+                    st.rerun()
+            wc1, wc2 = st.columns(2)
+            if wc1.button("Resend suggested welcome", key=f"wel_quick_{t['id']}",
+                          help="Send the auto-written welcome email as-is to this team's Inbox."):
+                logic.send_welcome(t["id"])
+                st.success("Welcome email sent.")
+            wc2.caption("✅ Already sent" if wsent else "✉️ Not sent yet")
 
 
 # --------------------------------------------------------------------------- #
