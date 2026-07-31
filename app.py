@@ -133,6 +133,7 @@ STUDENT_PAGES = {
     "Inbox": vs.inbox,
     "Concept Check": vs.concept_check,
     "Dashboard": vs.dashboard,
+    "Progress": vs.progress,
     "Founder & Opportunity": vs.founder_opportunity,
     "Founder & Team": vs.founder_skills,
     "Canvases": vs.canvases,

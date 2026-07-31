@@ -996,7 +996,8 @@ def scoring():
 def _round_score_email(team, rnd, rs):
     comp = rs["components"]
     _labels = {"commitment": "Commitment / completion", "evidence": "Evidence quality",
-               "coherence": "Model coherence", "concepts": "Concept coverage"}
+               "coherence": "Model coherence", "concepts": "Concept coverage",
+               "ai_verification": "AI verification"}
     lines = [f"Round {rnd} score for {team['name']}: {rs['score']:.0f}/100 "
              f"({rs['grade']}).", "",
              "How it breaks down (only what you could do this round is counted):"]
@@ -1056,13 +1057,16 @@ def round_scores():
     # ---- Sensitivity controls ------------------------------------------------
     st.markdown("### 🎚️ Scoring sensitivity")
     labels = {"commitment": "Commitment / completion", "evidence": "Evidence quality",
-              "coherence": "Model coherence", "concepts": "Concept coverage"}
+              "coherence": "Model coherence", "concepts": "Concept coverage",
+              "ai_verification": "AI verification"}
     with st.form("round_score_cfg"):
-        cols = st.columns(4)
+        cols = st.columns(len(logic.ROUND_SCORE_COMPONENTS))
         new_w = {}
         for i, k in enumerate(logic.ROUND_SCORE_COMPONENTS):
-            new_w[k] = cols[i].slider(labels[k], 0, 100, int(cfg["weights"][k]),
-                                      help=f"Relative weight of {labels[k].lower()}.")
+            hlp = ("Rewards actually EVALUATING AI use (verified/rejected/modified), not just "
+                   "logging it. Only counts once a team has used AI."
+                   if k == "ai_verification" else f"Relative weight of {labels[k].lower()}.")
+            new_w[k] = cols[i].slider(labels[k], 0, 100, int(cfg["weights"][k]), help=hlp)
         strict = st.slider(
             "Strictness (← lenient · harsh →)", 0, 100, int(cfg["strictness"]),
             help="50 is neutral. Below 50 lifts scores (forgiving); above 50 makes high "
@@ -1111,6 +1115,7 @@ def round_scores():
             "Evidence": _cell(c["evidence"]),
             "Coherence": _cell(c["coherence"]),
             "Concepts": _cell(c["concepts"]),
+            "AI verify": _cell(c["ai_verification"]),
             "Risk −": rs["penalty"],
         })
     st.dataframe(sorted(rows, key=lambda r: r["Score /100"], reverse=True),

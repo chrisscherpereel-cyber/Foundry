@@ -316,6 +316,15 @@ CREATE TABLE IF NOT EXISTS commitments (
     PRIMARY KEY (team_id, round),
     FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS metrics_history (
+    team_id    INTEGER NOT NULL,
+    round      INTEGER NOT NULL,
+    metrics    TEXT,                    -- JSON snapshot of learning metrics for the round
+    created_at TEXT,
+    PRIMARY KEY (team_id, round),
+    FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
+);
 """
 
 
@@ -343,6 +352,9 @@ def init_db():
         # Experiments: calibration — the team's prediction + confidence before results.
         _ensure_column(conn, "experiments", "predicted_outcome", "TEXT")
         _ensure_column(conn, "experiments", "confidence", "INTEGER")
+        # Pivots: lightweight "mini" course-corrections available from early rounds.
+        _ensure_column(conn, "pivots", "kind", "TEXT DEFAULT 'formal'")
+        _ensure_column(conn, "pivots", "round", "INTEGER")
         # Seed default settings once.
         cur = conn.execute("SELECT value FROM settings WHERE key='current_round'")
         if cur.fetchone() is None:
@@ -787,18 +799,18 @@ def resolve_event(event_id, resolved=1):
 # --------------------------------------------------------------------------- #
 # Pivot petitions
 # --------------------------------------------------------------------------- #
-def add_pivot(team_id, data):
+def add_pivot(team_id, data, kind="formal", status="Submitted", round_no=None):
     conn = get_conn()
     try:
         conn.execute(
             """INSERT INTO pivots(team_id, original_assum, challenge_evid, affected_block,
                 proposed_change, change_cost, new_assumptions, evidence_needed,
-                status, created_at)
-               VALUES(?,?,?,?,?,?,?,?, 'Submitted', ?)""",
+                status, kind, round, created_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
             (team_id, data.get("original_assum", ""), data.get("challenge_evid", ""),
              data.get("affected_block", ""), data.get("proposed_change", ""),
              data.get("change_cost", 0), data.get("new_assumptions", ""),
-             data.get("evidence_needed", ""), now()),
+             data.get("evidence_needed", ""), status, kind, round_no, now()),
         )
         conn.commit()
     finally:
@@ -1394,6 +1406,37 @@ def list_commitments(round_no=None):
         else:
             rows = conn.execute(
                 "SELECT * FROM commitments WHERE round=?", (round_no,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# Metrics history — a per-round snapshot of each team's learning metrics, so the
+# team can see its own progress trend over time.
+# --------------------------------------------------------------------------- #
+def save_metrics_snapshot(team_id, round_no, metrics_json):
+    conn = get_conn()
+    try:
+        conn.execute(
+            """INSERT INTO metrics_history(team_id, round, metrics, created_at)
+               VALUES(?,?,?,?)
+               ON CONFLICT(team_id, round) DO UPDATE SET
+                 metrics=excluded.metrics, created_at=excluded.created_at""",
+            (team_id, round_no, metrics_json, now()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_metrics_history(team_id):
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT round, metrics FROM metrics_history WHERE team_id=? ORDER BY round",
+            (team_id,),
+        ).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()

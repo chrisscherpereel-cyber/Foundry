@@ -163,6 +163,44 @@ def _ai_check_notice():
         st.markdown(content.AI_PROTOCOL_SUMMARY)
 
 
+def _mini_pivot_section(team):
+    """Lightweight, self-approved course-correction — available every round so that
+    changing your mind based on evidence is normalised early, not a late-game move."""
+    cur = db.current_round()
+    existing = [p for p in db.list_pivots(team["id"]) if (p.get("kind") or "formal") == "mini"]
+    with st.expander(f"🔄 Changed your mind? Log a course correction (mini-pivot) · "
+                     f"{len(existing)} so far"):
+        st.caption("Good founders change direction when the evidence says so — the earlier and "
+                   "cheaper, the better. A mini-pivot is a quick, self-approved note (no committee "
+                   f"needed) and earns +{logic.MINI_PIVOT_CREDIT} Evidence Credits for the learning. "
+                   "The formal Pivot Petition (investment committee) unlocks later for bigger changes.")
+        if logic.editing_locked(team["id"]):
+            _committed_banner(team)
+        else:
+            with st.form("mini_pivot_form", clear_on_submit=True):
+                original = st.text_input(
+                    "What did you believe that turned out wrong?",
+                    placeholder="We assumed busy parents would pay for weekly meal kits.")
+                evidence = st.text_input(
+                    "What evidence changed your mind?",
+                    placeholder="4 of 5 said they'd rather buy ready-made single meals.")
+                change = st.text_input(
+                    "What will you change?",
+                    placeholder="Switch the offer from weekly kits to grab-and-go single meals.")
+                if st.form_submit_button("Log course correction"):
+                    if not (original.strip() and change.strip()):
+                        st.error("Tell us what was wrong and what you'll change.")
+                    else:
+                        reward = logic.log_mini_pivot(team["id"], original, evidence, change)
+                        st.success(f"Course correction logged. +{reward} Evidence Credits for "
+                                   "learning from evidence.")
+                        st.rerun()
+        for p in existing:
+            st.markdown(f"- **R{p.get('round','?')}:** {p['original_assum']} → "
+                        f"*{p['proposed_change']}*"
+                        + (f"  (evidence: {p['challenge_evid']})" if p['challenge_evid'] else ""))
+
+
 def _commitment_panel(team, cur, all_items, done_n, complete):
     """Deadline + commit/decommit controls for the current round."""
     st.divider()
@@ -293,6 +331,9 @@ def round_briefing(team):
     if cl["carried"]:
         st.markdown("**⏪ Carried over from earlier rounds — finish these now**")
         _render_checklist([{**c, "label": f"(R{c['round']}) {c['label']}"} for c in cl["carried"]])
+
+    # ---- Productive failure: log a course correction any round --------------
+    _mini_pivot_section(team)
 
     # ---- Decision deadline & commitment -------------------------------------
     _commitment_panel(team, cur, all_items, done_n, complete)
@@ -667,9 +708,9 @@ def dashboard(team):
     vc1, vc2 = st.columns([1, 2])
     with vc1:
         st.metric("Venture Valuation", f"${val['valuation']:,.0f}",
-                  help="What your venture is worth RIGHT NOW — its potential discounted by how "
-                       "much of your model is actually backed by evidence. It grows as you test "
-                       "assumptions and log strong evidence.")
+                  help="What your venture is worth RIGHT NOW. A brand-new idea is worth $0 — you "
+                       "earn value through the decisions you make and the evidence you gather. "
+                       "It grows as you build your model, test assumptions, and log strong evidence.")
         st.caption(f"Potential ${val['potential_valuation']:,.0f} × "
                    f"{cov_pct:.0f}% evidence-backed − risk")
         st.progress(val["evidence_coverage"],
@@ -690,9 +731,13 @@ def dashboard(team):
             f"({cov_pct:.0f}% — raise it by testing important assumptions and logging strong evidence)\n"
             f"- Unresolved-risk penalty: −${val['unresolved_risk']:,.0f}"
         )
-        if cov_pct < 20:
-            st.caption("💡 Your valuation is low because almost nothing is proven yet — that's by "
-                       "design. Test your riskiest assumptions and log behavioral evidence to earn it.")
+        if cov_pct <= 0:
+            st.caption("💡 Your venture is worth **$0** right now — a good idea earns nothing until "
+                       "you work on it. Draft your model, name your assumptions, then test them and "
+                       "log evidence to grow this number.")
+        elif cov_pct < 25:
+            st.caption("💡 Your valuation is low because little is proven yet — that's by design. "
+                       "Test your riskiest assumptions and log behavioral evidence to earn more.")
 
     st.divider()
     st.write("### Performance dimensions")
@@ -741,6 +786,69 @@ def dashboard(team):
             )
         else:
             st.caption("No transactions yet.")
+
+
+# --------------------------------------------------------------------------- #
+# Progress — the team's own learning trend, so it can self-regulate
+# --------------------------------------------------------------------------- #
+def progress(team):
+    st.subheader("📈 Learning Progress")
+    _guide(
+        "This is your learning made visible — not a score to game, but a mirror. It tracks how "
+        "your evidence is getting stronger, how much of your model you've actually tested, how "
+        "often you've changed direction based on evidence, and whether you're verifying the AI "
+        "you use. Watch these trend UP over the semester.",
+        terms=[
+            ("Behavioral vs. opinion", "What customers DID vs. what they SAID. Behavior is stronger."),
+            ("Test coverage", "Share of your important assumptions you've actually tested."),
+            ("Evidence coverage", "How much of your venture's value is backed by evidence (drives valuation)."),
+            ("Course corrections", "Times you changed direction based on evidence (mini + formal pivots)."),
+        ],
+    )
+    m = logic.learning_metrics(team["id"])
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Behavioral evidence", m["behavioral"],
+              help="Strength-6+ evidence based on what customers did.")
+    c1.metric("Opinion-only", m["opinion"], help="Weak (strength ≤2) 'they said' evidence.")
+    c2.metric("Behavioral ratio", f"{m['behavioral_ratio']*100:.0f}%",
+              help="Share of your evidence that is behavioral. Aim to raise it.")
+    c2.metric("Avg evidence strength", m["avg_strength"])
+    c3.metric("Assumption test coverage", f"{m['test_coverage']*100:.0f}%",
+              help="Important assumptions you've tested (Supported/Refuted).")
+    c3.metric("Evidence coverage", f"{m['evidence_coverage']*100:.0f}%",
+              help="How much of your value is evidence-backed — this drives your valuation.")
+    c4.metric("Course corrections", m["pivots_evidence"],
+              help="Evidence-driven changes of direction (mini-pivots, refuted assumptions, approved pivots).")
+    c4.metric("AI verification",
+              f"{m['ai_verification']*100:.0f}%" if m["ai_verification"] is not None else "—",
+              help="Share of your AI uses you actually evaluated. '—' means you haven't logged AI yet.")
+
+    # ---- Trend over rounds ---------------------------------------------------
+    trend = logic.metrics_trend(team["id"])
+    st.divider()
+    st.write("### Your trend over the rounds")
+    if len(trend) < 2:
+        st.info("Your trend chart fills in as the rounds advance — check back after Round 1. "
+                "The numbers above are your live snapshot for this round.")
+    rows = [{
+        "Round": t["round"],
+        "Behavioral evidence": t.get("behavioral", 0),
+        "Opinion-only": t.get("opinion", 0),
+        "Test coverage %": round(t.get("test_coverage", 0) * 100),
+        "Evidence coverage %": round(t.get("evidence_coverage", 0) * 100),
+        "Course corrections": t.get("pivots_evidence", 0),
+    } for t in trend]
+    try:
+        import pandas as pd
+        df = pd.DataFrame(rows).set_index("Round")
+        st.caption("Evidence quality — behavioral should outgrow opinion over time:")
+        st.line_chart(df[["Behavioral evidence", "Opinion-only"]])
+        st.caption("How proven your model is — test coverage and evidence coverage should climb:")
+        st.line_chart(df[["Test coverage %", "Evidence coverage %"]])
+        st.caption("Evidence-driven course corrections (changing your mind is a strength):")
+        st.line_chart(df[["Course corrections"]])
+    except Exception:
+        st.table(rows)
 
 
 # --------------------------------------------------------------------------- #
@@ -1925,29 +2033,44 @@ def ai_assist(team):
         tool_area = c2.selectbox("Where did you use AI?", content.AI_TOOL_AREAS,
                                  help="Which part of the venture the AI helped with.")
         prompt = st.text_area("Your prompt", help="What you asked the AI (paste or paraphrase).")
-        ai_output = st.text_area("AI output (key claims)",
-                                 help="The main ideas/claims the AI produced that you're considering using.")
-        st.markdown("**AUDIT check**")
+        ai_output = st.text_area("① The AI's claim (required)",
+                                 help="The main idea/claim the AI produced. Logging AI here is "
+                                      "not about using it — it's about EVALUATING it.")
+        st.caption("AI output is confident opinion, not evidence, until you check it. Both the "
+                   "claim and how you'll verify it are required.")
+        st.markdown("**② AUDIT check** — how you'll verify the claim")
         audit = {}
         for letter, name, desc in content.AI_AUDIT_STEPS:
             audit[letter] = st.text_area(f"{letter} — {name}", help=desc, key=f"audit_{letter}")
         status = st.selectbox("Status", content.AI_STATUS_OPTIONS,
-                              help="Unverified until a real test supports it.")
+                              help="Unverified until a real test supports it. Come back and set "
+                                   "Verified/Rejected/Modified after you check — that's what's rewarded.")
         if st.form_submit_button("Log AI use", help="Save this AI contribution and its AUDIT."):
-            db.add_ai_log(team["id"], {
-                "round": int(rnd), "tool_area": tool_area, "prompt": prompt,
-                "ai_output": ai_output, "audit_a": audit["A"], "audit_u": audit["U"],
-                "audit_d": audit["D"], "audit_i": audit["I"], "audit_t": audit["T"],
-                "status": status,
-            })
-            st.success("AI use logged. Verify it with a real test before relying on it.")
-            st.rerun()
+            if not (ai_output or "").strip():
+                st.error("The AI's claim is required — what did the AI actually say?")
+            elif not (audit.get("I") or "").strip():
+                st.error("The verification step (I — Independent test) is required. How will you "
+                         "check this claim against reality? Logging AI you won't verify isn't allowed.")
+            else:
+                db.add_ai_log(team["id"], {
+                    "round": int(rnd), "tool_area": tool_area, "prompt": prompt,
+                    "ai_output": ai_output, "audit_a": audit["A"], "audit_u": audit["U"],
+                    "audit_d": audit["D"], "audit_i": audit["I"], "audit_t": audit["T"],
+                    "status": status,
+                })
+                st.success("AI use logged. Verify it with a real test, then set its status — "
+                           "verification is what earns credit, not usage.")
+                st.rerun()
 
     logs = db.list_ai_logs(team["id"])
     if logs:
         unv = sum(1 for l in logs if l["status"] == "Unverified")
+        rate = logic.ai_verification_rate(team["id"])
         st.divider()
         st.write(f"### AI log — {len(logs)} entries · {unv} unverified")
+        if rate is not None:
+            st.progress(rate, text=f"AI verification rate: {rate*100:.0f}% "
+                                    "(this is what the round score rewards — not how much AI you use)")
         for l in logs:
             icon = {"Verified": "✅", "Rejected": "❌", "Modified": "✏️"}.get(l["status"], "⏳")
             with st.expander(f"{icon} R{l['round']} · {l['tool_area']} · {l['status']} · {l['created_at']}"):

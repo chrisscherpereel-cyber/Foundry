@@ -798,6 +798,10 @@ def on_round_change(new_round):
         return
     rounds_passed = new_round - marker
     for t in db.list_teams():
+        # snapshot each finished round's learning metrics BEFORE applying new learning,
+        # so the team can see its progress trend over time.
+        for r in range(marker, new_round):
+            snapshot_metrics(t["id"], r)
         # learning from each round that just finished
         for r in range(marker, new_round):
             _apply_round_learning(t["id"], r)
@@ -1089,18 +1093,21 @@ def _index_from_score(score, default=0.90):
 
 
 # Evidence-coverage tuning.
-COVERAGE_FLOOR = 0.05          # an unproven venture is worth ~5% of its potential
+COVERAGE_FLOOR = 0.0           # an unproven venture is worth NOTHING until work is done
 COVERAGE_STRENGTH_TARGET = 40  # total evidence strength that counts as "well evidenced"
 COVERAGE_IMPORTANCE_MIN = 3    # assumptions this important+ count toward coverage
+COVERAGE_BUILD_TARGET = 8      # canvas versions + assumptions that count as "model built"
 
 
 def evidence_coverage(team_id):
-    """0–1 factor: how much of the venture's model is actually backed by evidence.
+    """0–1 factor: how much of the venture is actually WORTH so far.
 
-    Combines (a) the share of important assumptions the team has tested, and
-    (b) the strength of the evidence portfolio (behaviour beats opinion, since
-    strong evidence contributes far more total strength). Starts near zero and
-    climbs as real testing happens."""
+    Starts at exactly 0 for a brand-new team (a good idea with no work is worth
+    nothing) and rises with the decisions they make and the evidence they gather:
+      • model-building work — drafting canvases and naming assumptions (small)
+      • tested important assumptions — reducing real uncertainty (large)
+      • the strength of the evidence portfolio — behaviour beats opinion (large)
+    """
     assums = db.list_assumptions(team_id)
     important = [a for a in assums if a["importance"] >= COVERAGE_IMPORTANCE_MIN]
     if important:
@@ -1110,7 +1117,11 @@ def evidence_coverage(team_id):
         tested_ratio = 0.0
     ev = evidence_summary(team_id)
     strength_factor = min(1.0, ev["total_strength"] / COVERAGE_STRENGTH_TARGET)
-    coverage = 0.6 * tested_ratio + 0.4 * strength_factor
+    # Model-development signal: building canvases and identifying assumptions is real
+    # work that earns a little value even before anything is tested.
+    build_units = len(db.list_canvases(team_id)) + len(assums)
+    build_factor = min(1.0, build_units / COVERAGE_BUILD_TARGET)
+    coverage = 0.5 * tested_ratio + 0.35 * strength_factor + 0.15 * build_factor
     return round(max(COVERAGE_FLOOR, min(1.0, coverage)), 3)
 
 
@@ -1173,6 +1184,102 @@ def assumption_risk_report(team_id):
         "refuted": sum(1 for a in assums if a["status"] == "Refuted"),
         "exposed": exposed,
     }
+
+
+# --------------------------------------------------------------------------- #
+# Productive failure — mini-pivots (available from round 1) and evidence-driven
+# course-correction counts. Changing your mind early, cheaply, is rewarded.
+# --------------------------------------------------------------------------- #
+MINI_PIVOT_CREDIT = 3   # Evidence Credits for logging a course-correction (learning reward)
+
+
+def log_mini_pivot(team_id, original, evidence, change):
+    """Record a lightweight, self-approved course-correction and reward the learning.
+
+    Unlike the formal Pivot Petition (a late-round committee process), a mini-pivot
+    is available from the very first round so productive failure is normalised early,
+    when the cost of being wrong is low."""
+    rnd = db.current_round()
+    db.add_pivot(team_id,
+                 {"original_assum": original, "challenge_evid": evidence,
+                  "proposed_change": change},
+                 kind="mini", status="Logged", round_no=rnd)
+    db.adjust_resources(team_id, credits=MINI_PIVOT_CREDIT, kind="learning",
+                        description="Mini-pivot logged — learning from evidence",
+                        allow_negative=True)
+    return MINI_PIVOT_CREDIT
+
+
+def evidence_based_pivots(team_id):
+    """How much the team has changed its mind based on evidence."""
+    pivots = db.list_pivots(team_id)
+    mini = sum(1 for p in pivots if (p.get("kind") or "formal") == "mini")
+    approved = sum(1 for p in pivots
+                   if (p.get("kind") or "formal") == "formal"
+                   and p["status"] in ("Approved", "Conditional"))
+    refuted = sum(1 for a in db.list_assumptions(team_id) if a["status"] == "Refuted")
+    return {"mini": mini, "approved_formal": approved, "refuted": refuted,
+            "total": mini + approved + refuted}
+
+
+def ai_verification_rate(team_id):
+    """Share of AI-assist logs the team actually EVALUATED (reached a decided status),
+    rather than leaving as raw 'Unverified'. Rewards verification, not usage.
+
+    Returns None when the team hasn't logged any AI use (so non-use isn't penalised)."""
+    logs = db.list_ai_logs(team_id)
+    if not logs:
+        return None
+    decided = sum(1 for l in logs if l["status"] in ("Verified", "Rejected", "Modified"))
+    return decided / len(logs)
+
+
+# --------------------------------------------------------------------------- #
+# Learning metrics — a per-round snapshot the team can watch trend over time.
+# --------------------------------------------------------------------------- #
+def learning_metrics(team_id):
+    ev = evidence_summary(team_id)
+    total_ev = ev["count"]
+    assums = db.list_assumptions(team_id)
+    important = [a for a in assums if a["importance"] >= COVERAGE_IMPORTANCE_MIN]
+    tested = sum(1 for a in important if a["status"] in ("Supported", "Refuted"))
+    piv = evidence_based_pivots(team_id)
+    airate = ai_verification_rate(team_id)
+    return {
+        "behavioral": ev["behavioral"],
+        "opinion": ev["opinion"],
+        "evidence_items": total_ev,
+        "behavioral_ratio": round(ev["behavioral"] / total_ev, 3) if total_ev else 0.0,
+        "avg_strength": ev["avg_strength"],
+        "test_coverage": round(tested / len(important), 3) if important else 0.0,
+        "evidence_coverage": evidence_coverage(team_id),
+        "pivots_evidence": piv["total"],
+        "ai_verification": round(airate, 3) if airate is not None else None,
+    }
+
+
+def snapshot_metrics(team_id, rnd=None):
+    rnd = db.current_round() if rnd is None else rnd
+    db.save_metrics_snapshot(team_id, rnd, json.dumps(learning_metrics(team_id)))
+
+
+def metrics_trend(team_id):
+    """The team's learning metrics per round (stored history + a live point for the
+    current round), oldest first."""
+    out = []
+    for h in db.list_metrics_history(team_id):
+        try:
+            m = json.loads(h["metrics"])
+        except (ValueError, TypeError):
+            m = {}
+        m["round"] = h["round"]
+        out.append(m)
+    cur = db.current_round()
+    if not any(o.get("round") == cur for o in out):
+        m = learning_metrics(team_id)
+        m["round"] = cur
+        out.append(m)
+    return sorted(out, key=lambda o: o["round"])
 
 
 def quick_setup_teams(n_teams, difficulty, opportunity_mode="distinct",
@@ -1449,9 +1556,10 @@ def set_score_weights(weights):
 #   A risk penalty subtracts for important, still-untested assumptions.
 #   A strictness dial then stretches (strict) or lifts (lenient) the result.
 # --------------------------------------------------------------------------- #
-ROUND_SCORE_COMPONENTS = ["commitment", "evidence", "coherence", "concepts"]
-DEFAULT_ROUND_SCORE_WEIGHTS = {"commitment": 40, "evidence": 25,
-                               "coherence": 20, "concepts": 15}
+ROUND_SCORE_COMPONENTS = ["commitment", "evidence", "coherence", "concepts",
+                          "ai_verification"]
+DEFAULT_ROUND_SCORE_WEIGHTS = {"commitment": 35, "evidence": 25, "coherence": 15,
+                               "concepts": 15, "ai_verification": 10}
 RISK_PENALTY_PER_ITEM = 5     # points lost per important untested assumption
 RISK_PENALTY_CAP = 25
 
@@ -1559,8 +1667,10 @@ def round_score_available(rnd):
     """Which score components are fair to grade in a given round — i.e. the tools
     they depend on have been introduced. Commitment and concepts are always fair
     (they concern this round's own tasks); evidence and coherence only once their
-    tools exist, so teams are never marked down for things they couldn't do yet."""
-    avail = {"commitment": True, "concepts": True,
+    tools exist, so teams are never marked down for things they couldn't do yet.
+    AI verification is a base tool (always available) but only counts once a team
+    has actually logged AI use — see round_score."""
+    avail = {"commitment": True, "concepts": True, "ai_verification": True,
              "evidence": page_unlock_round("Evidence Ledger") <= rnd,
              "coherence": (canvas_unlock_round("vpc") <= rnd
                            or canvas_unlock_round("bmc") <= rnd)}
@@ -1608,6 +1718,11 @@ def round_score(team_id, rnd, config=None):
             parts.append(_clamp100(raw.get("Business-Model Coherence", 0)))
         if parts:
             comps["coherence"] = sum(parts) / len(parts)
+
+    # --- AI verification — rewards evaluating AI, only if they've used AI ------
+    airate = ai_verification_rate(team_id)
+    if airate is not None:
+        comps["ai_verification"] = 100.0 * airate
 
     # --- Weighted blend over AVAILABLE components only (renormalized) ---------
     counted = [k for k in ROUND_SCORE_COMPONENTS if k in comps]
