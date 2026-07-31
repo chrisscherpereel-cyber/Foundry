@@ -13,6 +13,10 @@ import content
 import logic
 import canvas_art
 
+# A recognizable "AI in a circle" badge used on every AI-logging control.
+_AI_ICON = "ⒶⒾ"
+_AI_LOG_LABEL = "ⒶⒾ Log AI use"
+
 
 # --------------------------------------------------------------------------- #
 # Shared guidance helpers
@@ -181,9 +185,10 @@ def _ai_quick_log(team, default_area=None, key="page", show_full_audit=True):
         data_source = cc2.selectbox("Did it give a source?", content.AI_DATA_SOURCES,
                                     key=f"aq_ds_{key}",
                                     help="AI often invents sources — pick honestly.")
-        verify = st.text_input("② How will you check it? (required)", key=f"aq_v_{key}",
+        verify = st.text_input("② How will you check it? (optional)", key=f"aq_v_{key}",
                                placeholder=content.AI_VERIFY_EXAMPLE,
-                               help="Name a real-world test — asking customers, not the AI.")
+                               help="Name a real-world test — or just link an assumption below "
+                                    "and it auto-verifies when you test it.")
         link_id = None
         if assums:
             opts = [None] + [a["id"] for a in assums]
@@ -203,9 +208,7 @@ def _ai_quick_log(team, default_area=None, key="page", show_full_audit=True):
                                                   key=f"aq_audit_{letter}_{key}")
         if st.form_submit_button("Log AI use", type="primary"):
             if not claim.strip():
-                st.error("The AI's claim is required.")
-            elif not verify.strip():
-                st.error("The verification step is required — how will you check it against reality?")
+                st.error("Just tell us the AI's claim — that's the only required field.")
             else:
                 db.add_ai_log(team["id"], {
                     "round": db.current_round(), "tool_area": tool_area, "prompt": "",
@@ -214,48 +217,42 @@ def _ai_quick_log(team, default_area=None, key="page", show_full_audit=True):
                     "audit_t": audit["T"], "claim_type": claim_type, "data_source": data_source,
                     "assumption_id": link_id, "status": "Unverified",
                 })
-                st.success("Logged. It stays Unverified until your test settles it — then it "
-                           "auto-verifies if you linked an assumption.")
+                st.success("Logged. It auto-verifies if you linked an assumption; otherwise set "
+                           "its status once you've checked it.")
                 st.rerun()
 
 
-def _ai_ack_popover(team, area, key, label="🤖"):
-    """A tiny button next to a text field to acknowledge AI use in one line.
-
-    Renders an st.popover, so it must NOT be placed inside an st.form."""
+def _ai_ack_popover(team, area, key, label=_AI_ICON):
+    """A tiny one-tap button to acknowledge AI use. Optional one-line note; no
+    verification required now (that happens later). Must NOT be inside an st.form."""
     if team is None or logic.editing_locked(team["id"]):
         return
-    with st.popover(label, help="Used AI for this? Acknowledge it in one line — verify later."):
-        st.caption(f"Acknowledge AI use in **{area}**")
-        with st.form(f"aiack_{key}", clear_on_submit=True):
-            claim = st.text_input("What did the AI suggest? (its claim)", key=f"aiack_c_{key}",
-                                  placeholder=content.AI_CLAIM_EXAMPLE)
-            verify = st.text_input("How will you check it?", key=f"aiack_v_{key}",
-                                   placeholder="ask real customers, run a test…")
-            if st.form_submit_button("Log AI use"):
-                if not claim.strip():
-                    st.error("Add the AI's claim.")
-                else:
-                    db.add_ai_log(team["id"], {
-                        "round": db.current_round(), "tool_area": area, "ai_output": claim,
-                        "verify_plan": verify, "audit_i": verify, "status": "Unverified"})
-                    st.success("Logged as Unverified — verify it later on the AI Assist Log.")
-                    st.rerun()
+    with st.popover(label, help="Used AI here? One tap to log it — verify later."):
+        st.caption(f"Log AI use in **{area}** — that's it. You can add proof later on the "
+                   "AI Assist Log.")
+        note = st.text_input("What did AI help with? (optional)", key=f"aiack_c_{key}",
+                             placeholder="one line, optional")
+        if st.button("✅ Log AI use", key=f"aiack_go_{key}", type="primary"):
+            db.add_ai_log(team["id"], {
+                "round": db.current_round(), "tool_area": area,
+                "ai_output": note.strip() or f"AI-assisted ({area})", "status": "Unverified"})
+            st.success("Logged. Verify it later — that's what earns credit.")
+            st.rerun()
 
 
 def _ai_check_notice(team=None, tool_area=None):
-    """Reusable reminder + in-context quick logger wherever AI is likely to be used."""
-    unv = logic.ai_unverified_count(team["id"]) if team else 0
-    title = "🤖 Used AI here? Log & check it"
+    """A light in-context reminder. Actual logging is one tap via the 🤖 buttons next
+    to the inputs, so this stays out of the way."""
+    if team is None:
+        return
+    unv = logic.ai_unverified_count(team["id"])
+    cols = st.columns([6, 1])
+    tip = f"Used AI on this page? Tap the **{_AI_ICON}** button next to a field to log it (one tap)."
     if unv:
-        title += f" · ⏳ {unv} unverified"
-    with st.expander(title):
-        st.markdown(content.AI_PROTOCOL_SUMMARY)
-        if team is not None:
-            st.divider()
-            st.caption("Quick-log it right here — two fields is enough:")
-            _ai_quick_log(team, default_area=tool_area, key=f"ctx_{tool_area or 'x'}",
-                          show_full_audit=False)
+        tip += f"  ·  ⏳ {unv} to verify"
+    cols[0].caption(tip)
+    with cols[1]:
+        _ai_ack_popover(team, tool_area or "Other", f"ctx_{tool_area or 'x'}", label=_AI_LOG_LABEL)
 
 
 def _mini_pivot_section(team):
@@ -272,7 +269,7 @@ def _mini_pivot_section(team):
         if logic.editing_locked(team["id"]):
             _committed_banner(team)
         else:
-            _ai_ack_popover(team, "Pivot reasoning", "minipivot_ai", label="🤖 Log AI use here")
+            _ai_ack_popover(team, "Pivot reasoning", "minipivot_ai", label=_AI_LOG_LABEL)
             with st.form("mini_pivot_form", clear_on_submit=True):
                 original = st.text_input(
                     "What did you believe that turned out wrong?",
@@ -636,20 +633,25 @@ def _render_concept_question(team, rnd, concept, locked, carried=False):
         _labels = {"complete": "complete", "meaningful": "means something",
                    "uses_concepts": "uses course concepts", "relevant": "relevant to your venture",
                    "evidence_based": "evidence-based"}
-        st.caption("Answer check: " + "  ".join(
+        st.caption("Answer strength: " + "  ".join(
             f"{'✅' if q['checks'][k] else '⬜'} {_labels[k]}" for k in
-            ["complete", "meaningful", "uses_concepts", "relevant", "evidence_based"]))
+            ["complete", "meaningful", "uses_concepts", "relevant", "evidence_based"])
+            + "  (needs: complete, meaningful, + at least one of the last three)")
         quiz_ok = logic.concept_quiz_correct(concept, picks) if quiz else True
-        if st.button("Save", key=f"{key}_save"):
+        quiz_answered = (not quiz) or all(p is not None for p in picks)
+        # Persistent status so it's always clear why it is / isn't covered.
+        if not quiz_answered:
+            st.info("⬜ Choose **True or False** above to finish this one.")
+        elif not quiz_ok:
+            st.error("⬜ The **true/false** isn't right yet — re-read the statement and try again.")
+        elif not q["ok"]:
+            st.warning("⬜ Almost — " + " ".join(q["feedback"]))
+        else:
+            st.success("✅ Looks good — click **Save** to mark it covered.")
+        if st.button("Save", key=f"{key}_save", type="primary"):
             import json as _json
             db.set_round_answer(team["id"], rnd, concept,
                                 _json.dumps({"quiz": picks, "text": text}))
-            if not quiz_ok:
-                st.warning("Saved — but re-check the true/false: it's not right yet.")
-            elif not q["ok"]:
-                st.warning("Saved — strengthen the answer: " + " ".join(q["feedback"]))
-            else:
-                st.success("Concept covered. ✅")
             st.rerun()
 
 
@@ -1118,7 +1120,7 @@ def founder_opportunity(team):
 
     if not ventures_editable:
         return
-    _ai_ack_popover(team, "Other", "venture_ai", label="🤖 Log AI use here")
+    _ai_ack_popover(team, "Other", "venture_ai", label=_AI_LOG_LABEL)
     with st.form("add_venture", clear_on_submit=True):
         st.write("**Add a candidate venture**")
         name = st.text_input(
@@ -1384,7 +1386,7 @@ def canvases(team):
 
     if canvas_ok:
         _ai_ack_popover(team, "Business Model", f"canvas_ai_{ctype}",
-                        label="🤖 Log AI use for this canvas")
+                        label=_AI_LOG_LABEL)
         with st.form(f"canvas_{ctype}", clear_on_submit=False):
             if ctype == "customer_profile":
                 data = _customer_profile_layout(ctype, val)
@@ -1455,7 +1457,7 @@ def assumptions(team):
     )
 
     if editable:
-        _ai_ack_popover(team, "Assumptions", "asm_ai", label="🤖 Log AI use here")
+        _ai_ack_popover(team, "Assumptions", "asm_ai", label=_AI_LOG_LABEL)
         with st.form("add_assumption", clear_on_submit=True):
             text = st.text_input(
                 "Assumption (state it as something that must be true)",
@@ -1574,7 +1576,7 @@ def experiments(team):
                f"Watch for bias: {card['bias']}")
 
     if editable:
-      _ai_ack_popover(team, "Experiment design", "exp_ai", label="🤖 Log AI use here")
+      _ai_ack_popover(team, "Experiment design", "exp_ai", label=_AI_LOG_LABEL)
       with st.form("buy_experiment", clear_on_submit=True):
         if assums:
             assum_id = st.selectbox(
@@ -1902,7 +1904,7 @@ def vp_auction(team):
                 db.delete_value_prop(p["id"])
                 st.rerun()
 
-    _ai_ack_popover(team, "Value Proposition", "vp_ai", label="🤖 Log AI use here")
+    _ai_ack_popover(team, "Value Proposition", "vp_ai", label=_AI_LOG_LABEL)
     with st.form("add_vp", clear_on_submit=True):
         st.write("**Add a value proposition**")
         name = st.text_input(
@@ -2042,7 +2044,7 @@ def pivots(team):
     )
 
     if editable:
-      _ai_ack_popover(team, "Pivot reasoning", "pivot_ai", label="🤖 Log AI use here")
+      _ai_ack_popover(team, "Pivot reasoning", "pivot_ai", label=_AI_LOG_LABEL)
       with st.form("pivot_form", clear_on_submit=True):
         original = st.text_area(
             "Original assumption",
@@ -2142,7 +2144,7 @@ def reflections(team):
         ex = existing or {}
         if existing:
             st.caption("✏️ Editing your existing entry for this round.")
-        _ai_ack_popover(team, "Investor narrative", "journal_ai", label="🤖 Log AI use here")
+        _ai_ack_popover(team, "Investor narrative", "journal_ai", label=_AI_LOG_LABEL)
         with st.form("reflection_form", clear_on_submit=False):
             vals = {}
             for keyname, label, stem in content.journal_core(cur):
@@ -2201,7 +2203,7 @@ def reflections(team):
 # AI Assist Log — generative AI use + AUDIT verification
 # --------------------------------------------------------------------------- #
 def ai_assist(team):
-    st.subheader("🤖 AI Assist Log")
+    st.subheader(f"{_AI_ICON} AI Assist Log")
     _guide(
         "You're expected to use generative AI every round — to draft canvases, brainstorm "
         "propositions, design experiments, and more. But fluent AI text is NOT evidence: it's "

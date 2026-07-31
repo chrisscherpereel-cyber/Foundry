@@ -380,7 +380,8 @@ def answer_quality(text, concept="", team_id=None):
     checks["relevant"] = bool(uniq & ctx) or bool(uniq & cwords)
     checks["evidence_based"] = bool(uniq & _ANSWER_EVIDENCE_WORDS)
     substance = (checks["uses_concepts"] + checks["relevant"] + checks["evidence_based"])
-    ok = checks["complete"] and checks["meaningful"] and substance >= 2
+    # Pass = a real, on-topic sentence: complete + meaningful + at least one substance signal.
+    ok = checks["complete"] and checks["meaningful"] and substance >= 1
     return {"ok": ok, "checks": checks, "passed": sum(checks.values()), "total": 5,
             "feedback": _quality_feedback(checks)}
 
