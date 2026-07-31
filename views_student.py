@@ -662,24 +662,37 @@ def dashboard(team):
     _resource_bar(team)
 
     val = logic.compute_valuation(team["id"])
+    cov_pct = val["evidence_coverage"] * 100
     st.divider()
     vc1, vc2 = st.columns([1, 2])
     with vc1:
         st.metric("Venture Valuation", f"${val['valuation']:,.0f}",
-                  help="Market Potential × Evidence Confidence × Business-Model Coherence × "
-                       "Execution − Unresolved Risk. Raising evidence and coherence raises "
-                       "this number.")
-        st.caption("Potential × Evidence × Coherence × Execution − Risk")
+                  help="What your venture is worth RIGHT NOW — its potential discounted by how "
+                       "much of your model is actually backed by evidence. It grows as you test "
+                       "assumptions and log strong evidence.")
+        st.caption(f"Potential ${val['potential_valuation']:,.0f} × "
+                   f"{cov_pct:.0f}% evidence-backed − risk")
+        st.progress(val["evidence_coverage"],
+                    text=f"Evidence coverage: {cov_pct:.0f}%")
     with vc2:
-        st.write("**Valuation components** — each multiplier runs from ×0.50 (weak) to "
-                 "×1.50 (strong) and comes from the Director's dashboard scores:")
+        st.write("**How this is built.** Your *potential* value is the opportunity size scaled "
+                 "by the Director's confidence/coherence/execution multipliers (each ×0.50 weak "
+                 "→ ×1.50 strong). That potential is then **discounted by evidence coverage** — "
+                 "the share of your model you've actually proven — so an unproven idea is worth "
+                 "little until the evidence comes in:")
         st.write(
             f"- Market potential: ${val['market_potential']:,.0f}\n"
             f"- Evidence confidence: ×{val['evidence_confidence']}\n"
             f"- Business-model coherence: ×{val['bm_coherence']}\n"
             f"- Execution factor: ×{val['execution_factor']}\n"
+            f"- **Potential valuation (if fully proven): ${val['potential_valuation']:,.0f}**\n"
+            f"- **Evidence coverage: ×{val['evidence_coverage']:.2f}** "
+            f"({cov_pct:.0f}% — raise it by testing important assumptions and logging strong evidence)\n"
             f"- Unresolved-risk penalty: −${val['unresolved_risk']:,.0f}"
         )
+        if cov_pct < 20:
+            st.caption("💡 Your valuation is low because almost nothing is proven yet — that's by "
+                       "design. Test your riskiest assumptions and log behavioral evidence to earn it.")
 
     st.divider()
     st.write("### Performance dimensions")

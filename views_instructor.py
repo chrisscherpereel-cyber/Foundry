@@ -995,13 +995,20 @@ def scoring():
 # --------------------------------------------------------------------------- #
 def _round_score_email(team, rnd, rs):
     comp = rs["components"]
+    _labels = {"commitment": "Commitment / completion", "evidence": "Evidence quality",
+               "coherence": "Model coherence", "concepts": "Concept coverage"}
     lines = [f"Round {rnd} score for {team['name']}: {rs['score']:.0f}/100 "
              f"({rs['grade']}).", "",
-             "How it breaks down (each 0–100, before weighting):",
-             f"  • Commitment / completion: {comp['commitment']:.0f}",
-             f"  • Evidence quality: {comp['evidence']:.0f}",
-             f"  • Model coherence: {comp['coherence']:.0f}",
-             f"  • Concept coverage: {comp['concepts']:.0f}"]
+             "How it breaks down (only what you could do this round is counted):"]
+    for k in logic.ROUND_SCORE_COMPONENTS:
+        if comp[k] is None:
+            lines.append(f"  • {_labels[k]}: not available this round (not counted)")
+        else:
+            lines.append(f"  • {_labels[k]}: {comp[k]:.0f}")
+    if rs.get("concept_answered"):
+        lines.append(f"    (of your concept answers, {rs['concept_aligned']}/"
+                     f"{rs['concept_answered']} were tied to your territory/venture — "
+                     "answers grounded in your business score higher)")
     if rs["penalty"]:
         lines.append(f"  • Risk penalty: -{rs['penalty']:.0f} "
                      f"({rs['exposed_assumptions']} important untested assumption(s))")
@@ -1015,11 +1022,14 @@ def round_scores():
     st.subheader("🏁 Round Scores (out of 100)")
     _guide(
         "This gives every team a single automated 0–100 grade for the work they committed in a "
-        "round. It blends four things — how much of the round's required work is complete "
+        "round. It blends up to four things — how much of the round's required work is complete "
         "(commitment), the strength of their evidence, their business-model coherence, and how "
         "many of the round's concepts they covered — then subtracts a penalty for important "
-        "assumptions they've left untested. Use the sensitivity controls to set how much each "
-        "part matters and how harshly to grade overall.",
+        "assumptions they've left untested. **Only what a team could actually do that round is "
+        "counted:** evidence and coherence are skipped (shown as n/a) until their tools are "
+        "introduced, and the weights renormalize over what's left, so no one is marked down for "
+        "a tool they don't have yet. **Concept answers that align with the team's territory and "
+        "the venture they're building score higher than generic answers.**",
         steps=[
             "Set the four component weights (they're normalized, so relative size is what counts).",
             "Set the strictness dial: left is lenient, right is harsh.",
@@ -1028,6 +1038,10 @@ def round_scores():
         ],
         terms=[
             ("Commitment", "Share of the round's decisions + concept-checks completed."),
+            ("Counted this round", "Only components whose tools exist by this round are graded; "
+             "others show n/a and don't lower the score."),
+            ("Alignment", "Concept answers referencing the team's own territory/venture count "
+             "fully; generic answers count partially."),
             ("Strictness", "A curve on the final score: lenient lifts scores, strict compresses them."),
             ("Risk penalty", "Points removed for important, still-untested assumptions."),
         ],
@@ -1079,6 +1093,9 @@ def round_scores():
         st.caption("🗓️ No decision deadline is set for this round (set advance times on "
                    "**Schedule & Timing**).")
 
+    def _cell(v):
+        return "n/a" if v is None else v
+
     rows = []
     scored = {}
     for t in teams:
@@ -1090,15 +1107,23 @@ def round_scores():
             "Score /100": rs["score"],
             "Grade": rs["grade"],
             "Commit": "✅" if rs["committed"] else "—",
-            "Completion": c["commitment"],
-            "Evidence": c["evidence"],
-            "Coherence": c["coherence"],
-            "Concepts": c["concepts"],
+            "Completion": _cell(c["commitment"]),
+            "Evidence": _cell(c["evidence"]),
+            "Coherence": _cell(c["coherence"]),
+            "Concepts": _cell(c["concepts"]),
             "Risk −": rs["penalty"],
         })
     st.dataframe(sorted(rows, key=lambda r: r["Score /100"], reverse=True),
                  use_container_width=True, hide_index=True)
-    st.caption("Scores recompute live from current work and your sensitivity settings above.")
+    _counted = logic.round_score_available(rnd)
+    _off = [k for k, v in _counted.items() if not v]
+    if _off:
+        st.caption("**n/a** = a component isn't graded this round because its tool isn't "
+                   "introduced yet, so teams aren't marked down for it. Not counted in Round "
+                   f"{rnd}: " + ", ".join(_off) + ". (Weights are renormalized over what counts.)")
+    st.caption("Scores recompute live from current work and your sensitivity settings above. "
+               "**Concept answers that reference the team's territory/venture score higher than "
+               "generic ones.**")
 
     # ---- Per-team detail + email --------------------------------------------
     st.markdown("### ✉️ Send a score to a team")
@@ -1222,14 +1247,17 @@ def overview():
         rows.append({
             "Team": t["name"], "Stage": t["stage"], "Capital": f"${t['capital']:,.0f}",
             "Credits": round(t["evidence_credits"], 1), "Valuation": f"${val['valuation']:,.0f}",
+            "Evidence-backed": f"{val['evidence_coverage']*100:.0f}%",
             "Evidence items": esum["count"], "Behavioral": esum["behavioral"],
             "⚠️ Flagged evidence": flagged,
             "High-risk untested": len(arep["exposed"]), "Experiments": eff["experiments"],
         })
     st.dataframe(rows, use_container_width=True, hide_index=True)
-    st.caption("**⚠️ Flagged evidence** = items whose wording may not match the strength the "
-               "team chose (likely opinion logged as behavior, or vice-versa). A coaching "
-               "signal, not an automatic penalty.")
+    st.caption("**Evidence-backed** = how much of the venture's value is earned by evidence "
+               "(tested important assumptions + evidence strength); it discounts the valuation, "
+               "so early rounds are low by design. **⚠️ Flagged evidence** = items whose wording "
+               "may not match the strength the team chose (likely opinion logged as behavior, or "
+               "vice-versa) — a coaching signal, not an automatic penalty.")
 
     # Fairness check — are all teams starting on equal footing?
     diff = db.get_setting("difficulty", "not set")

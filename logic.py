@@ -6,6 +6,7 @@ Kept free of Streamlit so it can be unit-tested and reused.
 """
 
 import json
+import re
 from datetime import datetime, timezone
 
 import db
@@ -1072,15 +1073,45 @@ def purchase_experiment(team_id, card, assumption_id, hypothesis, metric,
 
 # --------------------------------------------------------------------------- #
 # Valuation
-#   Venture Value = Market Potential x Evidence Confidence x BM Coherence
-#                   x Execution Factor - Unresolved Risk
+#   Potential value = Market Potential x Evidence Confidence x BM Coherence
+#                     x Execution Factor              (what it COULD be worth)
+#   Venture value   = Potential value x Evidence Coverage - Unresolved Risk
 #   Each index runs 0.50–1.50 and is derived from dashboard scores (0–100).
+#   Evidence coverage (0–1) discounts the opportunity by how much of the model
+#   the team has actually BACKED WITH EVIDENCE — so an unproven idea is worth
+#   little in week 1 and its value is EARNED as evidence comes in.
 # --------------------------------------------------------------------------- #
 def _index_from_score(score, default=0.90):
     """Map a 0–100 dashboard score onto a 0.50–1.50 index."""
     if score is None:
         return default
     return round(0.50 + (max(0.0, min(100.0, score)) / 100.0), 3)
+
+
+# Evidence-coverage tuning.
+COVERAGE_FLOOR = 0.05          # an unproven venture is worth ~5% of its potential
+COVERAGE_STRENGTH_TARGET = 40  # total evidence strength that counts as "well evidenced"
+COVERAGE_IMPORTANCE_MIN = 3    # assumptions this important+ count toward coverage
+
+
+def evidence_coverage(team_id):
+    """0–1 factor: how much of the venture's model is actually backed by evidence.
+
+    Combines (a) the share of important assumptions the team has tested, and
+    (b) the strength of the evidence portfolio (behaviour beats opinion, since
+    strong evidence contributes far more total strength). Starts near zero and
+    climbs as real testing happens."""
+    assums = db.list_assumptions(team_id)
+    important = [a for a in assums if a["importance"] >= COVERAGE_IMPORTANCE_MIN]
+    if important:
+        tested = sum(1 for a in important if a["status"] in ("Supported", "Refuted"))
+        tested_ratio = tested / len(important)
+    else:
+        tested_ratio = 0.0
+    ev = evidence_summary(team_id)
+    strength_factor = min(1.0, ev["total_strength"] / COVERAGE_STRENGTH_TARGET)
+    coverage = 0.6 * tested_ratio + 0.4 * strength_factor
+    return round(max(COVERAGE_FLOOR, min(1.0, coverage)), 3)
 
 
 def compute_valuation(team_id):
@@ -1096,14 +1127,17 @@ def compute_valuation(team_id):
     execution = _index_from_score(scores.get("Team Execution"))
     unresolved_risk = team["unresolved_risk"] or 0
 
-    value = (market_potential * evidence_conf * bm_coherence * execution
-             - unresolved_risk)
+    potential = market_potential * evidence_conf * bm_coherence * execution
+    coverage = evidence_coverage(team_id)
+    value = potential * coverage - unresolved_risk
     return {
         "market_potential": market_potential,
         "evidence_confidence": evidence_conf,
         "bm_coherence": bm_coherence,
         "execution_factor": execution,
         "unresolved_risk": unresolved_risk,
+        "evidence_coverage": coverage,
+        "potential_valuation": round(potential, 0),
         "valuation": round(value, 0),
     }
 
@@ -1460,14 +1494,90 @@ def _strictness_gamma(strictness):
     return math.exp((s - 50.0) / 50.0 * 0.9)   # ~0.41 (lenient) .. 1.0 .. 2.46 (strict)
 
 
+_ALIGN_STOPWORDS = set(
+    "the a an and or of to for in on with your you our we are is it that this "
+    "their they will can could would should about into from over under your "
+    "customers customer business venture idea using make made need needs when "
+    "what which where whom whose have will value team round".split())
+
+
+def _context_terms(team_id):
+    """Distinctive words from the team's territory + their own candidate ventures.
+
+    These represent 'their business' — an answer that references them is grounded
+    in the venture they're actually building, not generic boilerplate."""
+    team = db.get_team(team_id)
+    terms = set()
+    if team:
+        for w in re.findall(r"[A-Za-z]{4,}", team["opportunity"] or ""):
+            terms.add(w.lower())
+    for v in db.get_ventures(team_id):
+        for field in (v.get("name", ""), v.get("notes", "")):
+            for w in re.findall(r"[A-Za-z]{4,}", field or ""):
+                terms.add(w.lower())
+    return terms - _ALIGN_STOPWORDS
+
+
+def _answer_aligned(answer, terms):
+    if not answer or not terms:
+        return False
+    words = {w.lower() for w in re.findall(r"[A-Za-z]{4,}", answer)}
+    return bool(words & terms)
+
+
+def _concepts_component(team_id, rnd):
+    """This round's concept coverage, crediting answers that ALIGN with the team's
+    territory/venture more than generic ones.
+
+    Each of this round's concepts scores: 1.0 if answered and aligned to their
+    business, 0.6 if answered but generic, 0 if unanswered. Returns (score0_100,
+    answered, aligned, total)."""
+    cp = concept_progress(team_id, rnd)
+    if not cp:
+        return 100.0, 0, 0, 0
+    answers = db.get_round_answers(team_id, rnd)
+    terms = _context_terms(team_id)
+    total = len(cp)
+    score_sum = 0.0
+    answered = aligned = 0
+    for c in cp:
+        ans = (answers.get(c["concept"]) or "").strip()
+        if not ans:
+            continue
+        answered += 1
+        if not terms:                       # can't judge alignment → full credit
+            score_sum += 1.0
+        elif _answer_aligned(ans, terms):
+            score_sum += 1.0
+            aligned += 1
+        else:
+            score_sum += 0.6                # answered but generic
+    return 100.0 * score_sum / total, answered, aligned, total
+
+
+def round_score_available(rnd):
+    """Which score components are fair to grade in a given round — i.e. the tools
+    they depend on have been introduced. Commitment and concepts are always fair
+    (they concern this round's own tasks); evidence and coherence only once their
+    tools exist, so teams are never marked down for things they couldn't do yet."""
+    avail = {"commitment": True, "concepts": True,
+             "evidence": page_unlock_round("Evidence Ledger") <= rnd,
+             "coherence": (canvas_unlock_round("vpc") <= rnd
+                           or canvas_unlock_round("bmc") <= rnd)}
+    return avail
+
+
 def round_score(team_id, rnd, config=None):
     """Return a 0–100 round score with its component breakdown.
 
-    Scores the committed snapshot if the team has committed; otherwise the team's
-    current state. The result dict powers both the Director dashboard and any
-    feedback email."""
+    Only counts what the team could actually DO this round: commitment (this round's
+    decisions) and concept coverage always count; evidence and business-model
+    coherence count only once their tools are introduced. Concept answers that align
+    with the team's territory/venture are credited more than generic ones. Scores the
+    committed snapshot if committed, else the team's current state."""
     cfg = config or get_round_score_config()
     weights = cfg["weights"]
+    avail = round_score_available(rnd)
 
     # --- Commitment completion (from committed snapshot if present) ----------
     cstate = commitment_state(team_id, rnd)
@@ -1482,35 +1592,49 @@ def round_score(team_id, rnd, config=None):
         snap = commitment_snapshot(team_id, rnd)
     commitment = 100.0 * (snap["done"] / snap["total"]) if snap["total"] else 100.0
 
-    # --- Evidence & coherence (from the heuristic dashboard scores) ----------
+    # --- Concept coverage this round (alignment-weighted) --------------------
+    concepts, answered, aligned, concept_total = _concepts_component(team_id, rnd)
+
+    # --- Evidence & coherence — only from tools available by this round ------
     raw = _raw_scores(team_id)
-    evidence = _clamp100(raw.get("Evidence Strength", 0))
-    coherence = _clamp100(0.5 * raw.get("Business-Model Coherence", 0)
-                          + 0.5 * raw.get("Value Proposition Fit", 0))
+    comps = {"commitment": commitment, "concepts": concepts}
+    if avail["evidence"]:
+        comps["evidence"] = _clamp100(raw.get("Evidence Strength", 0))
+    if avail["coherence"]:
+        parts = []
+        if canvas_unlock_round("vpc") <= rnd:
+            parts.append(_clamp100(raw.get("Value Proposition Fit", 0)))
+        if canvas_unlock_round("bmc") <= rnd:
+            parts.append(_clamp100(raw.get("Business-Model Coherence", 0)))
+        if parts:
+            comps["coherence"] = sum(parts) / len(parts)
 
-    # --- Concept coverage for this round -------------------------------------
-    cp = concept_progress(team_id, rnd)
-    concepts = 100.0 * (sum(1 for c in cp if c["done"]) / len(cp)) if cp else 100.0
-
-    comps = {"commitment": commitment, "evidence": evidence,
-             "coherence": coherence, "concepts": concepts}
-
-    # --- Weighted blend -------------------------------------------------------
-    wsum = sum(weights.get(k, 0) for k in ROUND_SCORE_COMPONENTS) or 1.0
-    base = sum(comps[k] * weights.get(k, 0) for k in ROUND_SCORE_COMPONENTS) / wsum
+    # --- Weighted blend over AVAILABLE components only (renormalized) ---------
+    counted = [k for k in ROUND_SCORE_COMPONENTS if k in comps]
+    wsum = sum(weights.get(k, 0) for k in counted) or 1.0
+    base = sum(comps[k] * weights.get(k, 0) for k in counted) / wsum
 
     # --- Strictness curve -----------------------------------------------------
     gamma = _strictness_gamma(cfg["strictness"])
     curved = 100.0 * (max(0.0, base) / 100.0) ** gamma
 
-    # --- Risk penalty ---------------------------------------------------------
-    exposed = len(assumption_risk_report(team_id)["exposed"])
+    # --- Risk penalty (only once assumptions are a thing this round) ----------
+    if page_unlock_round("Assumption Map") <= rnd:
+        exposed = len(assumption_risk_report(team_id)["exposed"])
+    else:
+        exposed = 0
     penalty = min(RISK_PENALTY_CAP, exposed * RISK_PENALTY_PER_ITEM)
 
     final = max(0.0, min(100.0, curved - penalty))
     return {
-        "components": {k: round(comps[k], 1) for k in ROUND_SCORE_COMPONENTS},
+        # None for a component means "not available this round — not counted".
+        "components": {k: (round(comps[k], 1) if k in comps else None)
+                       for k in ROUND_SCORE_COMPONENTS},
+        "counted": counted,
         "weights": {k: weights.get(k, 0) for k in ROUND_SCORE_COMPONENTS},
+        "concept_answered": answered,
+        "concept_aligned": aligned,
+        "concept_total": concept_total,
         "base": round(base, 1),
         "curved": round(curved, 1),
         "penalty": penalty,
@@ -1639,15 +1763,18 @@ def auto_scores(team_id, weights=None, round_no=None, only_available=True):
 
 
 def valuation_from_scores(team_id, scores):
-    """Predicted valuation from a set of (possibly not-yet-saved) scores."""
+    """Predicted valuation from a set of (possibly not-yet-saved) scores.
+
+    Applies the same evidence-coverage discount as compute_valuation, so a
+    predicted valuation can't run ahead of the evidence the team has gathered."""
     team = db.get_team(team_id)
     if not team:
         return None
-    value = (team["market_potential"]
-             * _index_from_score(scores.get("Evidence Strength"))
-             * _index_from_score(scores.get("Business-Model Coherence"))
-             * _index_from_score(scores.get("Team Execution"))
-             - (team["unresolved_risk"] or 0))
+    potential = (team["market_potential"]
+                 * _index_from_score(scores.get("Evidence Strength"))
+                 * _index_from_score(scores.get("Business-Model Coherence"))
+                 * _index_from_score(scores.get("Team Execution")))
+    value = potential * evidence_coverage(team_id) - (team["unresolved_risk"] or 0)
     return round(value, 0)
 
 
