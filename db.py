@@ -10,6 +10,7 @@ import sqlite3
 import json
 import os
 import secrets
+import threading
 from datetime import datetime, timezone
 
 DB_PATH = os.environ.get(
@@ -49,6 +50,14 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT
+);
+
+CREATE TABLE IF NOT EXISTS games (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    name          TEXT NOT NULL,
+    current_round INTEGER DEFAULT 1,   -- each game advances independently
+    hours_marker  INTEGER DEFAULT 1,   -- per-game marker for round-change side effects
+    created_at    TEXT
 );
 
 CREATE TABLE IF NOT EXISTS teams (
@@ -363,6 +372,9 @@ def init_db():
         _ensure_column(conn, "ai_logs", "assumption_id", "INTEGER")
         _ensure_column(conn, "ai_logs", "experiment_id", "INTEGER")
         _ensure_column(conn, "ai_logs", "use_type", "TEXT")   # how the AI was used
+        # Multi-game: teams belong to a game (cohort); each game advances on its own.
+        _ensure_column(conn, "teams", "game_id", "INTEGER")
+        _ensure_column(conn, "teams", "roster", "TEXT")       # JSON member roster
         # Decision Journal: one round-adaptive focus question per entry.
         _ensure_column(conn, "reflections", "focus_prompt", "TEXT")
         _ensure_column(conn, "reflections", "focus_answer", "TEXT")
@@ -391,6 +403,17 @@ def init_db():
     if not get_round_topics():
         for i, key in enumerate(content.DEFAULT_TOPIC_ORDER):
             set_topic_placement(key, i + 1, 0)       # one topic per round by default
+    # Ensure at least one game exists; migrate any legacy team into it.
+    if not list_games():
+        gid = create_game("Game 1")
+        legacy_round = int(get_setting("current_round", "1") or 1)
+        set_game_round(gid, legacy_round)
+        conn = get_conn()
+        try:
+            conn.execute("UPDATE teams SET game_id=? WHERE game_id IS NULL", (gid,))
+            conn.commit()
+        finally:
+            conn.close()
 
 
 # --------------------------------------------------------------------------- #
@@ -418,8 +441,113 @@ def set_setting(key, value):
         conn.close()
 
 
+# --------------------------------------------------------------------------- #
+# Games (cohorts) — multiple can run at once, each with its own round pointer.
+# An "active game" context (set per request) makes current_round(), list_teams(),
+# and the round-change markers resolve to whichever game is being played/managed.
+# --------------------------------------------------------------------------- #
+# Thread-local so concurrent sessions (each a Streamlit ScriptRunner thread) never
+# clobber each other's active-game context.
+_ctx = threading.local()
+
+
+def set_active_game(game_id):
+    _ctx.game_id = int(game_id) if game_id else None
+
+
+def active_game_id():
+    return getattr(_ctx, "game_id", None)
+
+
+def create_game(name):
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            "INSERT INTO games(name, current_round, hours_marker, created_at) VALUES(?,1,1,?)",
+            (name, now()),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def list_games():
+    conn = get_conn()
+    try:
+        rows = conn.execute("SELECT * FROM games ORDER BY id").fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_game(game_id):
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT * FROM games WHERE id=?", (game_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def rename_game(game_id, name):
+    conn = get_conn()
+    try:
+        conn.execute("UPDATE games SET name=? WHERE id=?", (name, game_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_game(game_id):
+    conn = get_conn()
+    try:
+        conn.execute("DELETE FROM teams WHERE game_id=?", (game_id,))
+        conn.execute("DELETE FROM games WHERE id=?", (game_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_game_round(game_id, rnd):
+    conn = get_conn()
+    try:
+        conn.execute("UPDATE games SET current_round=? WHERE id=?", (int(rnd), game_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_game_marker(game_id):
+    g = get_game(game_id)
+    return int(g["hours_marker"]) if g and g.get("hours_marker") is not None else 1
+
+
+def set_game_marker(game_id, marker):
+    conn = get_conn()
+    try:
+        conn.execute("UPDATE games SET hours_marker=? WHERE id=?", (int(marker), game_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def current_round():
+    gid = active_game_id()
+    if gid:
+        g = get_game(gid)
+        if g:
+            return int(g["current_round"])
     return int(get_setting("current_round", "1"))
+
+
+def set_current_round(rnd):
+    """Set the round for the active game (or the legacy global if no game context)."""
+    gid = active_game_id()
+    if gid:
+        set_game_round(gid, rnd)
+    else:
+        set_setting("current_round", int(rnd))
 
 
 # --------------------------------------------------------------------------- #
@@ -427,20 +555,22 @@ def current_round():
 # --------------------------------------------------------------------------- #
 def create_team(name, opportunity="", founder_card=None, capital=2000,
                 evidence_credits=10, founder_hours=40, market_potential=1000000,
-                hours_per_round=None):
+                hours_per_round=None, game_id=None, roster=None):
     conn = get_conn()
     try:
         code = secrets.token_hex(3).upper()
         # `founder_hours` here is the per-round time budget; teams start with one
         # round's worth and are topped up each round.
         hpr = hours_per_round if hours_per_round is not None else founder_hours
+        gid = game_id if game_id is not None else active_game_id()
         cur = conn.execute(
             """INSERT INTO teams(name, join_code, opportunity, founder_card, ventures,
                                  capital, evidence_credits, venture_tokens, founder_hours,
-                                 market_potential, hours_per_round, created_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                 market_potential, hours_per_round, game_id, roster, created_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (name, code, opportunity, _dumps(founder_card or {}), _dumps([]),
-             capital, evidence_credits, 100, founder_hours, market_potential, hpr, now()),
+             capital, evidence_credits, 100, founder_hours, market_potential, hpr,
+             gid, _dumps(roster or []), now()),
         )
         team_id = cur.lastrowid
         # Seed structured founder skills from the card archetype.
@@ -457,10 +587,18 @@ def create_team(name, opportunity="", founder_card=None, capital=2000,
         conn.close()
 
 
-def list_teams():
+def list_teams(game_id="__active__"):
+    """Teams for a game. With no argument, returns the ACTIVE game's teams (or all
+    teams if no game context is set). Pass game_id=None to force all teams."""
+    if game_id == "__active__":
+        game_id = active_game_id()
     conn = get_conn()
     try:
-        rows = conn.execute("SELECT * FROM teams ORDER BY name").fetchall()
+        if game_id is None:
+            rows = conn.execute("SELECT * FROM teams ORDER BY name").fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM teams WHERE game_id=? ORDER BY name", (game_id,)).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()

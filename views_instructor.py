@@ -426,7 +426,7 @@ def round_control():
         if ac1.button(f"▶️ Advance to Round {cur + 1}", type="primary",
                       help="Moves the whole cohort forward one round and unlocks its tools."):
             new_r = cur + 1
-            db.set_setting("current_round", new_r)
+            db.set_current_round(new_r)
             logic.on_round_change(new_r)   # apply learning, reset hours, charge salaries
             msg = f"Advanced to Round {new_r} — its tools are now unlocked for all teams."
             if logic.auto_flag("auto_run_on_advance", default=False):
@@ -444,7 +444,7 @@ def round_control():
         jc1, jc2 = st.columns(2)
         if cur > 1 and jc1.button(f"◀️ Back to Round {cur - 1}",
                                   help="Return the cohort to the previous round."):
-            db.set_setting("current_round", cur - 1)
+            db.set_current_round(cur - 1)
             st.warning(f"Moved back to Round {cur - 1}.")
             st.rerun()
         with jc2:
@@ -452,7 +452,7 @@ def round_control():
                                    help="Set any round directly (non-sequential).")
             if st.button("Set round", help="Apply this exact round to the whole cohort."):
                 advanced = int(jump) > cur
-                db.set_setting("current_round", int(jump))
+                db.set_current_round(int(jump))
                 logic.on_round_change(int(jump))
                 msg = f"Round set to {jump}."
                 if advanced and logic.auto_flag("auto_run_on_advance", default=False):
@@ -575,6 +575,59 @@ def round_control():
 
 
 # --------------------------------------------------------------------------- #
+# Games — run several cohorts at once, each on its own round
+# --------------------------------------------------------------------------- #
+def games_console():
+    st.subheader("🎮 Games")
+    _guide(
+        "Run several games at once — one per class, section, or cohort. Each game has its own "
+        "teams and advances on its **own round**, independently of the others. Pick which game "
+        "you're managing with the **Active game** selector in the sidebar; every other Director "
+        "page (Team Setup, Round Control, scoring, etc.) then applies to that game.",
+        terms=[
+            ("Game", "An independent cohort of teams with its own round and timeline."),
+            ("Active game", "The one you're currently managing (chosen in the sidebar)."),
+        ],
+    )
+    with st.form("new_game", clear_on_submit=True):
+        name = st.text_input("New game name", placeholder="e.g. MGT 301 · Section 3")
+        if st.form_submit_button("➕ Create game") and name.strip():
+            gid = db.create_game(name.strip())
+            st.session_state["active_game_id"] = gid
+            st.success(f"Created '{name.strip()}' and made it active.")
+            st.rerun()
+
+    st.divider()
+    games = db.list_games()
+    active = db.active_game_id()
+    st.write(f"### {len(games)} game(s)")
+    for g in games:
+        teams = db.list_teams(g["id"])
+        tag = " · **active**" if g["id"] == active else ""
+        with st.expander(f"{g['name']} — Round {g['current_round']} · {len(teams)} teams{tag}"):
+            c1, c2 = st.columns([3, 1])
+            new_name = c1.text_input("Name", value=g["name"], key=f"gname_{g['id']}")
+            if c1.button("Rename", key=f"grn_{g['id']}") and new_name.strip():
+                db.rename_game(g["id"], new_name.strip())
+                st.rerun()
+            if teams:
+                c2.caption("Teams: " + ", ".join(t["name"] for t in teams[:8])
+                           + (" …" if len(teams) > 8 else ""))
+            st.caption(f"Join codes: " + ", ".join(f"{t['name']}={t['join_code']}"
+                                                    for t in teams[:12]) if teams else
+                       "No teams yet — add them on Team Setup (or import a roster).")
+            if len(games) > 1:
+                if st.checkbox("Confirm delete this game and ALL its teams",
+                               key=f"gdelchk_{g['id']}"):
+                    if st.button("🗑️ Delete game", key=f"gdel_{g['id']}"):
+                        db.delete_game(g["id"])
+                        st.session_state.pop("active_game_id", None)
+                        st.rerun()
+            else:
+                st.caption("You can't delete the only game.")
+
+
+# --------------------------------------------------------------------------- #
 # Team setup
 # --------------------------------------------------------------------------- #
 def team_setup():
@@ -601,6 +654,70 @@ def team_setup():
              "risks they haven't retired."),
         ],
     )
+
+    _active = db.get_game(db.active_game_id()) if db.active_game_id() else None
+    if _active:
+        st.info(f"🎮 New teams are added to the active game **{_active['name']}** "
+                "(switch games in the sidebar). Imported rosters create their own games.")
+
+    # ---- Import a class roster ----------------------------------------------
+    st.write("### 📥 Import teams from a roster (.xlsx / .csv)")
+    st.caption("Upload a class contact list. Each **Class + Section** becomes its own game, "
+               "each **Team** number becomes a team, and the members are saved to that team's "
+               "roster. Names in your file are only used as the roster.")
+    import io
+    tb = io.BytesIO()
+    logic.roster_template_workbook().save(tb)
+    st.download_button(
+        "⬇️ Download example template (.xlsx)", tb.getvalue(), "roster_template.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        help="Columns: FirstName, LastName, PrimaryEmail, Class, Section, Team.")
+
+    up = st.file_uploader("Roster file", type=["xlsx", "csv"], key="roster_upload")
+    if up is not None:
+        try:
+            headers, rows = logic.read_table(up.getvalue(), up.name)
+            parsed, warns = logic.parse_roster(headers, rows)
+        except Exception as exc:   # noqa: BLE001
+            st.error(f"Couldn't read that file: {exc}")
+            parsed, warns = [], []
+        if not parsed:
+            st.warning("No teams found. Make sure the file has Class/Section and Team columns "
+                       "(download the template above for the exact format).")
+        else:
+            st.markdown("**Preview**")
+            for g in parsed:
+                mem = sum(len(t["members"]) for t in g["teams"])
+                st.write(f"- **{g['game']}** — {len(g['teams'])} teams · {mem} members")
+            if warns:
+                with st.expander(f"⚠️ {len(warns)} row(s) skipped"):
+                    for w in warns[:50]:
+                        st.caption(w)
+            ic1, ic2, ic3 = st.columns(3)
+            imp_diff = ic1.selectbox("Difficulty", list(content.DIFFICULTY_LEVELS.keys()),
+                                     index=list(content.DIFFICULTY_LEVELS).index("Standard"),
+                                     key="imp_diff")
+            imp_opp = ic2.selectbox("Territories", ["distinct", "same"], key="imp_opp",
+                                    format_func=lambda x: "Distinct per team" if x == "distinct"
+                                    else "Same for all")
+            imp_fnd = ic3.selectbox("Founder cards", ["balanced", "varied"], key="imp_fnd",
+                                    format_func=lambda x: "Balanced (fair)" if x == "balanced"
+                                    else "Varied archetypes")
+            single = len(parsed) == 1
+            merge = False
+            if single and _active:
+                merge = st.checkbox(f"Add these teams to the current game "
+                                    f"(**{_active['name']}**) instead of a new game",
+                                    value=False)
+            if st.button("📥 Import teams", type="primary"):
+                summ = logic.import_roster(
+                    parsed, imp_diff, imp_opp, imp_fnd,
+                    merge_into_game_id=(db.active_game_id() if merge else None))
+                st.success(f"Imported {summ['teams']} teams across {max(summ['games'],1)} game(s) "
+                           f"({summ['members']} members). Switch games in the sidebar to manage each.")
+                st.rerun()
+
+    st.divider()
 
     # ---- Quick balanced setup ------------------------------------------------
     st.write("### ⚡ Quick balanced setup")

@@ -161,8 +161,10 @@ def set_total_rounds(n):
             db.upsert_schedule_row(rnd, None, None)
     db.delete_schedule_rows_above(n)
     db.set_setting("total_rounds", n)
-    if db.current_round() > n:
-        db.set_setting("current_round", n)
+    # Clamp every game's round to the new maximum.
+    for g in db.list_games():
+        if int(g["current_round"]) > n:
+            db.set_game_round(g["id"], n)
 
 
 def topics_for_round(rnd):
@@ -894,15 +896,19 @@ def _apply_round_learning(team_id, completed_round):
 def on_round_change(new_round):
     """When the round advances: apply learning for each completed round, RESET each
     team's founder-hours to this week's budget (no carryover — unused hours are
-    lost), and charge specialist salaries. Idempotent via a marker."""
-    try:
-        marker = int(db.get_setting("hours_marker", "1"))
-    except (TypeError, ValueError):
-        marker = 1
+    lost), and charge specialist salaries. Idempotent via a per-game marker."""
+    gid = db.active_game_id()
+    if gid:
+        marker = db.get_game_marker(gid)
+    else:
+        try:
+            marker = int(db.get_setting("hours_marker", "1"))
+        except (TypeError, ValueError):
+            marker = 1
     if new_round <= marker:
         return
     rounds_passed = new_round - marker
-    for t in db.list_teams():
+    for t in db.list_teams():   # active game's teams (or all, if no game context)
         # snapshot each finished round's learning metrics BEFORE applying new learning,
         # so the team can see its progress trend over time.
         for r in range(marker, new_round):
@@ -916,7 +922,10 @@ def on_round_change(new_round):
         if salary:
             db.adjust_resources(t["id"], money=-salary * rounds_passed, kind="salary",
                                 description="Specialist salaries", allow_negative=True)
-    db.set_setting("hours_marker", new_round)
+    if gid:
+        db.set_game_marker(gid, new_round)
+    else:
+        db.set_setting("hours_marker", new_round)
 
 
 def _parse_dt(text):
@@ -946,7 +955,7 @@ def maybe_auto_advance():
             if dt <= now and row["round"] > target:
                 target = row["round"]
     if target != cur:
-        db.set_setting("current_round", target)
+        db.set_current_round(target)
     return target
 
 
@@ -1469,6 +1478,178 @@ def quick_setup_teams(n_teams, difficulty, opportunity_mode="distinct",
         send_welcome(new_team["id"])   # Round-1 welcome + subtle hints in the Inbox
         created.append({"name": name, "code": code, "territory": territory})
     return created
+
+
+# --------------------------------------------------------------------------- #
+# Roster import — build games and teams from a class contact list (xlsx/csv).
+#   A row is a student. Columns (case-insensitive, flexible):
+#     Class, Section  -> which GAME the team belongs to
+#     Team            -> which team within that game
+#     FirstName, LastName, PrimaryEmail (or Email) -> the member
+# --------------------------------------------------------------------------- #
+_ROSTER_ALIASES = {
+    "class": "class", "section": "section", "team": "team",
+    "firstname": "first", "first name": "first", "first": "first",
+    "lastname": "last", "last name": "last", "last": "last",
+    "primaryemail": "email", "email": "email", "e-mail": "email",
+}
+
+
+def read_table(file_bytes, filename):
+    """Return (headers, rows-as-dicts) from an .xlsx or .csv upload."""
+    name = (filename or "").lower()
+    if name.endswith(".csv") or name.endswith(".txt"):
+        import csv
+        import io
+        text = file_bytes.decode("utf-8-sig", errors="replace")
+        reader = csv.reader(io.StringIO(text))
+        rows = [r for r in reader if any((c or "").strip() for c in r)]
+        if not rows:
+            return [], []
+        headers = [str(h or "").strip() for h in rows[0]]
+        data = [dict(zip(headers, r)) for r in rows[1:]]
+        return headers, data
+    # xlsx
+    import io
+    import openpyxl
+    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
+    ws = wb.active
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows:
+        return [], []
+    headers = [str(h).strip() if h is not None else "" for h in rows[0]]
+    data = []
+    for r in rows[1:]:
+        if not any(c is not None and str(c).strip() for c in r):
+            continue
+        data.append({headers[i]: r[i] for i in range(min(len(headers), len(r)))})
+    return headers, data
+
+
+def _norm_row(row):
+    """Map a raw row's columns onto normalized keys via the aliases."""
+    out = {}
+    for k, v in row.items():
+        key = _ROSTER_ALIASES.get(str(k).strip().lower())
+        if key:
+            out[key] = v
+    return out
+
+
+def parse_roster(headers, rows):
+    """Group rows into games (Class + Section) → teams (Team #) → members.
+
+    Returns a list of {"game": name, "teams": [{"label", "members":[{name,email}]}]}
+    and a list of warnings."""
+    warnings = []
+    games = {}      # game_name -> {team_label -> [members]}
+    order = []      # preserve game order
+    for raw in rows:
+        r = _norm_row(raw)
+        cls = str(r.get("class") or "").strip()
+        section = str(r.get("section") or "").strip()
+        team = str(r.get("team") or "").strip()
+        first = str(r.get("first") or "").strip()
+        last = str(r.get("last") or "").strip()
+        email = str(r.get("email") or "").strip()
+        name = (first + " " + last).strip() or email
+        if not (cls or section) or not team:
+            warnings.append(f"Skipped a row missing Class/Section or Team: {name or raw}")
+            continue
+        game_name = cls if not section else f"{cls} · Section {section}"
+        game_name = game_name.strip(" ·")
+        if game_name not in games:
+            games[game_name] = {}
+            order.append(game_name)
+        label = f"Team {team}"
+        games[game_name].setdefault(label, [])
+        if name:
+            games[game_name][label].append({"name": name, "email": email})
+    result = []
+    for gname in order:
+        teams = [{"label": lbl, "members": mem}
+                 for lbl, mem in sorted(games[gname].items(),
+                                        key=lambda kv: _team_sort_key(kv[0]))]
+        result.append({"game": gname, "teams": teams})
+    return result, warnings
+
+
+def _team_sort_key(label):
+    digits = "".join(ch for ch in label if ch.isdigit())
+    return (int(digits) if digits else 9999, label)
+
+
+def import_roster(parsed, difficulty="Standard", opportunity_mode="distinct",
+                  founder_mode="balanced", merge_into_game_id=None):
+    """Create games and teams from a parsed roster. Returns a summary dict."""
+    preset = content.DIFFICULTY_LEVELS.get(difficulty, content.DIFFICULTY_LEVELS["Standard"])
+    db.set_setting("difficulty", difficulty)
+    territories = content.OPPORTUNITY_TERRITORIES
+    summary = {"games": 0, "teams": 0, "members": 0, "details": []}
+
+    for gi, g in enumerate(parsed):
+        if merge_into_game_id and len(parsed) == 1:
+            gid = merge_into_game_id
+        else:
+            gid = db.create_game(g["game"])
+            summary["games"] += 1
+        db.set_active_game(gid)
+        made = []
+        for ti, t in enumerate(g["teams"]):
+            territory = (territories[0] if opportunity_mode == "same"
+                         else territories[ti % len(territories)])
+            if founder_mode == "varied":
+                base_card = dict(content.FOUNDER_CARDS[ti % len(content.FOUNDER_CARDS)])
+            else:
+                base_card = dict(content.BALANCED_FOUNDER_CARD)
+            base_card["budget"] = preset["capital"]
+            base_card["hours"] = preset["hours"]
+            code = db.create_team(
+                t["label"], territory, base_card,
+                capital=preset["capital"], evidence_credits=preset["credits"],
+                founder_hours=preset["hours"], market_potential=preset["market_potential"],
+                hours_per_round=preset["hours"], game_id=gid, roster=t["members"],
+            )
+            nt = db.get_team_by_code(code)
+            b = default_build(db.get_team(nt["id"]))
+            db.update_team(nt["id"], build_budget=b, founder_hours=b)
+            send_welcome(nt["id"])
+            made.append({"team": t["label"], "code": code, "members": len(t["members"])})
+            summary["teams"] += 1
+            summary["members"] += len(t["members"])
+        summary["details"].append({"game": g["game"], "game_id": gid, "teams": made})
+    return summary
+
+
+def roster_template_workbook():
+    """Build an example roster .xlsx (openpyxl Workbook) with the expected columns."""
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Roster"
+    headers = ["FirstName", "LastName", "PrimaryEmail", "Class", "Section", "Team",
+               "Team Member 1", "Team Member 2", "Team Member 3", "Team Member 4"]
+    ws.append(headers)
+    example = [
+        ("Ada", "Lovelace", "ada@example.edu", "MGT 301", 1, 1),
+        ("Alan", "Turing", "alan@example.edu", "MGT 301", 1, 1),
+        ("Grace", "Hopper", "grace@example.edu", "MGT 301", 1, 2),
+        ("Katherine", "Johnson", "kj@example.edu", "MGT 301", 1, 2),
+        ("Mae", "Jemison", "mae@example.edu", "MGT 301", 2, 1),
+        ("Sally", "Ride", "sally@example.edu", "MGT 301", 2, 1),
+    ]
+    # Fill the redundant "Team Member N" columns per team for readability.
+    from collections import defaultdict
+    teams = defaultdict(list)
+    for f, l, e, c, s, tm in example:
+        teams[(c, s, tm)].append(f"{f} {l}")
+    for f, l, e, c, s, tm in example:
+        members = teams[(c, s, tm)]
+        row = [f, l, e, c, s, tm] + members[:4] + [""] * (4 - len(members[:4]))
+        ws.append(row)
+    for col in "ABCDEFGHIJ":
+        ws.column_dimensions[col].width = 16
+    return wb
 
 
 def cohort_balance(team_list):

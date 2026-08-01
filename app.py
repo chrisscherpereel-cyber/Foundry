@@ -40,15 +40,17 @@ st.set_page_config(page_title="Venture Foundry — From hunch to hard evidence",
                    page_icon=_PAGE_ICON, layout="wide")
 
 db.init_db()
-# Date/time-based round advance, applied on load. If the round moved forward and
-# the Director enabled it, run the Auto-Director for the new round.
-_prev_round = db.current_round()
-_new_round = logic.maybe_auto_advance()
-# Grant per-round founder time and charge specialist salaries for any rounds
-# reached (idempotent — safe to call every load).
-logic.on_round_change(_new_round)
-if _new_round != _prev_round and logic.auto_flag("auto_run_on_advance", default=False):
-    logic.run_autopilot(_new_round)
+
+
+def _sync_active_game():
+    """Apply date-based auto-advance and round-change side effects for whichever game
+    is currently active (a student's game, or the Director's selected game)."""
+    prev = db.current_round()
+    new = logic.maybe_auto_advance()
+    logic.on_round_change(new)
+    if new != prev and logic.auto_flag("auto_run_on_advance", default=False):
+        logic.run_autopilot(new)
+    return new
 
 
 def _scroll_top_on_change(state_key, page):
@@ -241,6 +243,10 @@ def student_shell():
         st.error("Team no longer exists.")
         logout()
         st.stop()
+    # A student plays inside their team's game — advance that game, not others.
+    db.set_active_game(team.get("game_id"))
+    _sync_active_game()
+    team = db.get_team(team["id"])   # round may have advanced
 
     with st.sidebar:
         branding.sidebar_logo()
@@ -266,6 +272,7 @@ def student_shell():
 # Instructor shell
 # --------------------------------------------------------------------------- #
 INSTRUCTOR_PAGES = {
+    "Games": vi.games_console,
     "Cohort Overview": vi.overview,
     "Auto-Director": vi.auto_director,
     "Team Setup": vi.team_setup,
@@ -281,11 +288,28 @@ INSTRUCTOR_PAGES = {
 
 
 def instructor_shell():
+    # Pick which game the Director is managing (each runs independently).
+    games = db.list_games()
+    if not games:
+        db.create_game("Game 1")
+        games = db.list_games()
+    saved = st.session_state.get("active_game_id")
+    ids = [g["id"] for g in games]
+    if saved not in ids:
+        saved = ids[0]
     with st.sidebar:
         branding.sidebar_logo()
         st.header("🎩 Venture Foundry Director")
+        gsel = st.selectbox(
+            "Active game", ids, index=ids.index(saved),
+            format_func=lambda i: next(g["name"] for g in games if g["id"] == i),
+            help="Manage one game at a time. Each game advances on its own round.")
+        st.session_state["active_game_id"] = gsel
+        db.set_active_game(gsel)
+        _sync_active_game()
         diff = db.get_setting("difficulty", "not set")
-        st.caption(f"Round {db.current_round()} of {logic.total_rounds()} · Difficulty: {diff}")
+        st.caption(f"Round {db.current_round()} of {logic.total_rounds()} · "
+                   f"{len(db.list_teams())} team(s) · Difficulty: {diff}")
         page = st.radio("Console", list(INSTRUCTOR_PAGES.keys()))
         with st.expander("Director's questions"):
             for q in [
