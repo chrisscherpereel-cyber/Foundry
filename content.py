@@ -1461,6 +1461,48 @@ EVENT_STORY_INTRO = {
 }
 
 
+# One-line "why this matters" rationale shown at the top of each tool, tying the
+# action back to the goal of the game (earning value through evidence).
+WHY_MATTERS = {
+    "Round Briefing": "Your run-of-show for the week — start here so you always know the next move.",
+    "Founder & Opportunity": "Your team's real edge and constraints — pick opportunities that fit who you are.",
+    "Founder & Team": "Time is your scarcest resource — spend it where it buys the most learning.",
+    "Canvases": "A shared picture of your business — every box is a hypothesis to test, not a fact.",
+    "Assumption Map": "Find the beliefs that could kill the venture — so you test those first.",
+    "Experiment Marketplace": "Buy the cheapest test that could prove you wrong — evidence, not opinion.",
+    "Evidence Ledger": "This is how you EARN value — credible evidence turns ideas into worth.",
+    "VP Auction": "Back the ideas your evidence supports — betting on hype gets taxed.",
+    "Market Events": "Curveballs that target your weak spot — a prompt to test the assumption they expose.",
+    "Pivot Petition": "Change direction on evidence, not frustration — a disciplined pivot is a strength.",
+    "Concept Check": "Show you can APPLY each idea to your venture, not just recognize it.",
+    "AI Assist Log": "AI is confident opinion until you check it — verification is what earns credit.",
+    "Decision Journal": "Your personal learning record — reflection is where the lessons stick.",
+    "Dashboard": "Your venture at a glance — value grows only as your evidence does.",
+    "Progress": "Your learning made visible — watch behavior beat opinion over time.",
+}
+
+# The 4-step first-run welcome tour for new teams.
+WELCOME_TOUR = [
+    ("Welcome to Venture Foundry 🏭",
+     "You're founders in an accelerator. The one rule that shapes everything: **you earn "
+     "resources by producing credible evidence** that your business could work — not by having "
+     "a good idea or a polished pitch."),
+    ("Start each round on the Round Briefing 📅",
+     "It tells you exactly what to do this round, shows **‘Your next step’**, and is where you "
+     "**commit** your work when you're done. When in doubt, go there."),
+    ("Turn beliefs into evidence 🔬",
+     "Map your riskiest **assumptions**, buy a cheap **experiment** to test one, then log what "
+     "you learned in the **Evidence Ledger**. Behavior (what customers DID) beats opinion."),
+    ("Watch your venture grow 📈",
+     "Your valuation, badges, and Founder Level all rise as your evidence does. Make it yours: "
+     "set a team **name, color & mascot** on the Dashboard. Good luck — build the evidence!"),
+]
+
+
+def why_matters(tool):
+    return WHY_MATTERS.get(tool)
+
+
 def narrative_phase(rnd, total_rounds):
     """(index, name, emoji, theme) for the current round's story phase."""
     total = max(1, int(total_rounds))

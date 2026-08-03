@@ -192,6 +192,10 @@ def _sidebar_todo(team):
     done = sum(1 for i in items if i["done"])
     total = len(items)
     st.progress(done / total if total else 1.0, text=f"Round {rnd} to-do: {done}/{total} done")
+    nxt = logic.next_action(team["id"], rnd)
+    if nxt:
+        where = f" → {nxt['tool']}" if nxt.get("tool") else ""
+        st.caption(f"👉 **Next:** {nxt['label']}{where}")
     open_items = [i for i in items if not i["done"]]
     if open_items:
         with st.expander(f"📝 {len(open_items)} still to do"):

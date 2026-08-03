@@ -489,6 +489,27 @@ def round_complete(team_id, rnd):
     return all(i["done"] for i in items) if items else True
 
 
+def round_progress_counts(team_id, rnd):
+    """(done, total) across everything the team must finish this round."""
+    cl = round_checklist(team_id, rnd)
+    items = cl["decisions"] + cl["questions"] + cl["carried"]
+    return sum(1 for i in items if i["done"]), len(items)
+
+
+def next_action(team_id, rnd):
+    """The single most important thing to do next this round, or None if all done.
+
+    Priority: clear carried-over backlog first, then this round's decisions, then any
+    concept questions — so a team always has one clear next move."""
+    cl = round_checklist(team_id, rnd)
+    for bucket in (cl["carried"], cl["decisions"], cl["questions"]):
+        for it in bucket:
+            if not it["done"]:
+                return {"label": it.get("label", it.get("concept", "")),
+                        "tool": it.get("tool", ""), "carried": bool(it.get("carried"))}
+    return None
+
+
 def strict_round_mode():
     """When on (default), tools not relevant to the current round are view-only."""
     return auto_flag("strict_round_mode", default=True)

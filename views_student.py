@@ -23,20 +23,90 @@ _AI_LOG_LABEL = "🔵 AI · log use"
 # Shared guidance helpers
 # --------------------------------------------------------------------------- #
 def _guide(what, steps=None, terms=None, expanded=False):
-    """Render a plain-language 'How this page works' panel.
-
-    what   — one-paragraph explanation of the page's purpose.
-    steps  — optional list of do-this-now steps.
-    terms  — optional list of (term, definition) tuples to define jargon.
-    """
+    """Render a plain-language 'How this page works' panel with progressive disclosure:
+    full help in early rounds, then it condenses, then it shrinks to a one-liner —
+    heavy help early, lighter later once teams know the ropes."""
+    cur = db.current_round()
+    if cur >= 9:                       # experienced: a one-line reminder only
+        st.caption("ℹ️ " + what.split(". ")[0].rstrip(".") + ".")
+        return
+    lighten = cur >= 5                 # mid-game: drop the step-by-step and glossary
     with st.expander("ℹ️ How this page works", expanded=expanded):
         st.markdown(what)
-        if steps:
+        if steps and not lighten:
             st.markdown("**What to do here**")
             st.markdown("\n".join(f"{i+1}. {s}" for i, s in enumerate(steps)))
-        if terms:
+        if terms and not lighten:
             st.markdown("**Key terms**")
             st.markdown("\n".join(f"- **{t}** — {d}" for t, d in terms))
+
+
+def _why(tool):
+    """A one-line 'why this matters' chip that ties the tool back to the goal."""
+    text = content.why_matters(tool)
+    if text:
+        st.markdown(
+            f"<div style='display:inline-block;background:rgba(13,148,136,.10);"
+            f"border:1px solid rgba(13,148,136,.35);border-radius:14px;padding:3px 12px;"
+            f"font-size:13px;margin:2px 0 8px;'>💡 <b>Why this matters:</b> {text}</div>",
+            unsafe_allow_html=True)
+
+
+def _progress_ring(done, total, size=64):
+    """An SVG donut showing round completion."""
+    frac = (done / total) if total else 1.0
+    r = size / 2 - 6
+    circ = 2 * 3.14159 * r
+    off = circ * (1 - frac)
+    color = "#059669" if frac >= 1 else ("#4f46e5" if frac > 0 else "#94a3b8")
+    cx = size / 2
+    return (f"<svg width='{size}' height='{size}' viewBox='0 0 {size} {size}'>"
+            f"<circle cx='{cx}' cy='{cx}' r='{r}' fill='none' stroke='#e5e7eb' stroke-width='8'/>"
+            f"<circle cx='{cx}' cy='{cx}' r='{r}' fill='none' stroke='{color}' stroke-width='8' "
+            f"stroke-linecap='round' stroke-dasharray='{circ:.1f}' stroke-dashoffset='{off:.1f}' "
+            f"transform='rotate(-90 {cx} {cx})'/>"
+            f"<text x='50%' y='50%' text-anchor='middle' dominant-baseline='central' "
+            f"font-size='{int(size*0.26)}' font-weight='700' fill='{color}'>{done}/{total}</text>"
+            "</svg>")
+
+
+def _celebrate(key):
+    """Fire a one-time celebration (balloons) per key, per session."""
+    seen = st.session_state.setdefault("_celebrated", set())
+    if key not in seen:
+        seen.add(key)
+        try:
+            st.balloons()
+        except Exception:
+            pass
+
+
+def _first_run_tour(team):
+    """A dismissible 4-step welcome tour shown once to a new team."""
+    if db.has_ack(team["id"], "tour_done") or st.session_state.get("tour_skipped"):
+        return
+    step = st.session_state.get("tour_step", 0)
+    title, body = content.WELCOME_TOUR[step]
+    with st.container(border=True):
+        st.markdown(f"### {title}")
+        st.markdown(body)
+        st.caption(f"Step {step + 1} of {len(content.WELCOME_TOUR)}")
+        cols = st.columns([1, 1, 1, 3])
+        if step > 0 and cols[0].button("← Back", key="tour_back"):
+            st.session_state["tour_step"] = step - 1
+            st.rerun()
+        if step < len(content.WELCOME_TOUR) - 1:
+            if cols[1].button("Next →", type="primary", key="tour_next"):
+                st.session_state["tour_step"] = step + 1
+                st.rerun()
+        else:
+            if cols[1].button("Let's go! 🚀", type="primary", key="tour_done"):
+                db.set_ack(team["id"], "tour_done")
+                st.rerun()
+        if cols[2].button("Skip", key="tour_skip"):
+            st.session_state["tour_skipped"] = True
+            db.set_ack(team["id"], "tour_done")
+            st.rerun()
 
 
 def _resource_bar(team):
@@ -407,7 +477,11 @@ def _commitment_panel(team, cur, all_items, done_n, complete):
             if st.button(label, type="primary", key=f"commit_{cur}",
                          help="Lock in your decisions for this round."):
                 ok, msg = logic.commit_round(team["id"], cur)
-                (st.success if ok else st.error)(msg)
+                if ok:
+                    st.success("🎉 " + msg)
+                    _celebrate(f"commit_{team['id']}_{cur}")
+                else:
+                    st.error(msg)
                 st.rerun()
 
 
@@ -419,6 +493,28 @@ def round_briefing(team):
     topics = logic.topics_for_round(cur)
     titles = " + ".join(t["title"] for t in topics) if topics else ""
     st.subheader(f"📅 Round Briefing — Round {cur}" + (f": {titles}" if titles else ""))
+
+    _first_run_tour(team)
+
+    # ---- Do this next: one clear primary action + a progress ring -----------
+    nxt = logic.next_action(team["id"], cur)
+    done_n, total_n = logic.round_progress_counts(team["id"], cur)
+    rc1, rc2 = st.columns([4, 1])
+    with rc1:
+        if nxt:
+            where = f" → **{nxt['tool']}**" if nxt.get("tool") else ""
+            tag = "⏪ Finish first: " if nxt.get("carried") else "👉 Your next step: "
+            st.markdown(
+                f"<div style='background:rgba(79,70,229,.08);border:1px solid rgba(79,70,229,.35);"
+                f"border-radius:8px;padding:10px 14px;font-size:16px;'>{tag}"
+                f"<b>{nxt['label']}</b>{where}</div>", unsafe_allow_html=True)
+            st.caption("Do this next — then come back here for the following step.")
+        else:
+            st.success("🎉 You're all set for this round — everything's complete. Commit below "
+                       "when you're ready.")
+            _celebrate(f"roundcomplete_{team['id']}_{cur}")
+    with rc2:
+        st.markdown(_progress_ring(done_n, total_n, 74), unsafe_allow_html=True)
 
     # ---- Narrative arc: chapter banner + the investor's voice ---------------
     _pidx, _pname, _pemoji, _ptheme = logic.story_phase(cur)
@@ -596,6 +692,7 @@ def inbox(team):
 # --------------------------------------------------------------------------- #
 def concept_check(team):
     st.subheader("🧠 Concept Check")
+    _why("Concept Check")
     _guide(
         "Every concept introduced this round must be covered — but not all the same way. Most "
         "are covered automatically by the **decisions you make in the tools** (e.g. building a "
@@ -653,9 +750,20 @@ def concept_check(team):
             _render_concept_question(team, c["round"], c["concept"], locked, carried=True)
 
 
+def _autosave_concept(team_id, rnd, concept, tkey, qkeys):
+    """Autosave a concept answer (text + true/false picks) as the student edits."""
+    import json as _json
+    text = st.session_state.get(tkey, "")
+    picks = []
+    for qk in qkeys:
+        v = st.session_state.get(qk)
+        picks.append(None if v is None else (v == "True"))
+    db.set_round_answer(team_id, rnd, concept, _json.dumps({"quiz": picks, "text": text}))
+
+
 def _render_concept_question(team, rnd, concept, locked, carried=False):
     """One reasoning concept: a true/false understanding check + a quality-checked
-    applied answer. Rendered outside a form so quality feedback updates live."""
+    applied answer. Autosaves as you type — no Save button needed."""
     stt = logic.concept_answer_status(team["id"], rnd, concept)
     defn, prompt = content.concept_help(concept)
     quiz = content.CONCEPT_QUIZ.get(concept, [])
@@ -669,22 +777,26 @@ def _render_concept_question(team, rnd, concept, locked, carried=False):
             return
 
         key = f"cq_{rnd}_{concept}"
-        # True/false understanding check.
+        tkey = f"{key}_text"
+        qkeys = [f"{key}_q{i}" for i in range(len(quiz))]
+        _args = (team["id"], rnd, concept, tkey, qkeys)
+        # True/false understanding check (autosaves on change).
         picks = []
         stored_quiz = stt["quiz"] or []
         for i, (stmt, _truth) in enumerate(quiz):
             prev = stored_quiz[i] if i < len(stored_quiz) else None
-            choice = st.radio(f"True or false? *{stmt}*",
-                              ["True", "False"],
+            choice = st.radio(f"True or false? *{stmt}*", ["True", "False"],
                               index=(None if prev is None else (0 if prev else 1)),
-                              key=f"{key}_q{i}", horizontal=True)
+                              key=qkeys[i], horizontal=True,
+                              on_change=_autosave_concept, args=_args)
             picks.append(None if choice is None else (choice == "True"))
         # Applied answer (with a per-field AI-acknowledge button beside it).
         ta, tb = st.columns([12, 1])
         with ta:
-            text = st.text_area(f"➡️ {prompt}", value=stt["text"], key=f"{key}_text",
+            text = st.text_area(f"➡️ {prompt}", value=stt["text"], key=tkey,
+                                on_change=_autosave_concept, args=_args,
                                 help="One or two sentences, using the round's concepts and "
-                                     "grounded in your venture's evidence.")
+                                     "grounded in your venture's evidence. Saves automatically.")
         with tb:
             st.write("")
             _ai_ack_popover(team, f"Concept check: {concept}", f"{key}_ai")
@@ -693,10 +805,9 @@ def _render_concept_question(team, rnd, concept, locked, carried=False):
         _labels = {"complete": "complete", "meaningful": "means something",
                    "uses_concepts": "uses course concepts", "relevant": "relevant to your venture",
                    "evidence_based": "evidence-based"}
-        st.caption("Answer strength: " + "  ".join(
+        st.caption("💾 Autosaves as you type · Answer strength: " + "  ".join(
             f"{'✅' if q['checks'][k] else '⬜'} {_labels[k]}" for k in
-            ["complete", "meaningful", "uses_concepts", "relevant", "evidence_based"])
-            + "  (needs: complete, meaningful, + at least one of the last three)")
+            ["complete", "meaningful", "uses_concepts", "relevant", "evidence_based"]))
         quiz_ok = logic.concept_quiz_correct(concept, picks) if quiz else True
         quiz_answered = (not quiz) or all(p is not None for p in picks)
         # Persistent status so it's always clear why it is / isn't covered.
@@ -707,12 +818,7 @@ def _render_concept_question(team, rnd, concept, locked, carried=False):
         elif not q["ok"]:
             st.warning("⬜ Almost — " + " ".join(q["feedback"]))
         else:
-            st.success("✅ Looks good — click **Save** to mark it covered.")
-        if st.button("Save", key=f"{key}_save", type="primary"):
-            import json as _json
-            db.set_round_answer(team["id"], rnd, concept,
-                                _json.dumps({"quiz": picks, "text": text}))
-            st.rerun()
+            st.success("✅ This concept is covered.")
 
 
 # --------------------------------------------------------------------------- #
@@ -720,6 +826,7 @@ def _render_concept_question(team, rnd, concept, locked, carried=False):
 # --------------------------------------------------------------------------- #
 def founder_skills(team):
     st.subheader("🛠️ Founder & Team")
+    _why("Founder & Team")
     _guide(
         "Your founders can't be great at everything. Each round the founder has a fixed amount "
         "of time — a long work week — to split between RUNNING the business (experiments, "
@@ -938,6 +1045,7 @@ def dashboard(team):
     lvl, tot = logic.founder_level(team["id"])
     st.caption(f"Stage: **{team['stage']}**  ·  Round {db.current_round()}  ·  "
                f"🧑‍🚀 Founder Level {lvl}  ·  Join code `{team['join_code']}`")
+    _why("Dashboard")
     _team_identity_editor(team)
     _guide(
         "This is your venture's home screen. It shows what you own (top row), what your "
@@ -1045,6 +1153,7 @@ def dashboard(team):
 # --------------------------------------------------------------------------- #
 def progress(team):
     st.subheader("📈 Learning Progress")
+    _why("Progress")
 
     # ---- Trophy case: level, streak, badges ---------------------------------
     lvl, tot = logic.founder_level(team["id"])
@@ -1134,6 +1243,7 @@ def progress(team):
 # --------------------------------------------------------------------------- #
 def founder_opportunity(team):
     st.subheader("🧭 Founder & Opportunity Formation")
+    _why("Founder & Opportunity")
     editable = _round_gate("Founder & Opportunity", team)
     _ai_check_notice(team, tool_area="Other")
     _guide(
@@ -1437,6 +1547,7 @@ def _bmc_layout(ctype, val):
 
 def canvases(team):
     st.subheader("🗂️ Canvases")
+    _why("Canvases")
     editable = _round_gate("Canvases", team)
     cur = db.current_round()
     _guide(
@@ -1501,6 +1612,12 @@ def canvases(team):
         return latest["data"].get(key, "") if latest else ""
 
     st.write(f"### {title}")
+    # Inline validation: how complete is the latest saved version?
+    _filled = sum(1 for key, _lbl, _ in blocks if str(val(key)).strip())
+    _total = len(blocks)
+    st.markdown(_progress_ring(_filled, _total, 40)
+                + f" <span style='opacity:.75'>{_filled}/{_total} blocks filled — empty is fine "
+                "early; fill them from real evidence.</span>", unsafe_allow_html=True)
     if existing:
         st.caption(f"{len(existing)} version(s) saved. Editing starts from the latest.")
 
@@ -1552,6 +1669,7 @@ def canvases(team):
 # --------------------------------------------------------------------------- #
 def assumptions(team):
     st.subheader("🎯 Assumption Map & Market")
+    _why("Assumption Map")
     editable = _round_gate("Assumption Map", team)
     _ai_check_notice(team, tool_area="Assumptions")
     _guide(
@@ -1648,6 +1766,7 @@ def assumptions(team):
 # --------------------------------------------------------------------------- #
 def experiments(team):
     st.subheader("🧪 Experiment Marketplace")
+    _why("Experiment Marketplace")
     editable = _round_gate("Experiment Marketplace", team)
     _guide(
         "This is where you buy tests for your assumptions. Each experiment card costs money, "
@@ -1831,6 +1950,7 @@ def experiments(team):
 # --------------------------------------------------------------------------- #
 def evidence(team):
     st.subheader("📒 Evidence Ledger")
+    _why("Evidence Ledger")
     editable = _round_gate("Evidence Ledger", team)
     _ai_check_notice(team, tool_area="Other")
     _guide(
@@ -1951,6 +2071,7 @@ def evidence(team):
 # --------------------------------------------------------------------------- #
 def vp_auction(team):
     st.subheader("💠 Value Proposition Auction")
+    _why("VP Auction")
     editable = _round_gate("VP Auction", team)
     _ai_check_notice(team, tool_area="Value Proposition")
     _guide(
@@ -2108,6 +2229,7 @@ def vp_auction(team):
 # --------------------------------------------------------------------------- #
 def market_events(team):
     st.subheader("📡 Market Events")
+    _why("Market Events")
     _round_gate("Market Events", team)
     _guide(
         "Each round the Director introduces a market event — a competitor move, a rule change, "
@@ -2140,6 +2262,7 @@ def market_events(team):
 # --------------------------------------------------------------------------- #
 def pivots(team):
     st.subheader("🔀 Pivot Petition")
+    _why("Pivot Petition")
     editable = _round_gate("Pivot Petition", team)
     _ai_check_notice(team, tool_area="Pivot reasoning")
     _guide(
@@ -2222,6 +2345,7 @@ def pivots(team):
 # --------------------------------------------------------------------------- #
 def reflections(team):
     st.subheader("📝 Entrepreneurial Decision Journal")
+    _why("Decision Journal")
     cur = db.current_round()
     topics = logic.topics_for_round(cur)
     focus_key = topics[0]["key"] if topics else None
@@ -2324,6 +2448,7 @@ def reflections(team):
 # --------------------------------------------------------------------------- #
 def ai_assist(team):
     st.subheader(f"{_AI_ICON} AI Assist Log")
+    _why("AI Assist Log")
     _guide(
         "You're expected to use generative AI every round — to draft canvases, brainstorm "
         "propositions, design experiments, and more. But fluent AI text is NOT evidence: it's "
