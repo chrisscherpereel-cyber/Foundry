@@ -1367,7 +1367,8 @@ def overview():
         flagged = sum(1 for e in db.list_evidence(t["id"])
                       if logic.evidence_flags(e["description"], e["source"], e["strength"]))
         rows.append({
-            "Team": t["name"], "Stage": t["stage"], "Capital": f"${t['capital']:,.0f}",
+            "Team": f"{logic.team_identity(t)['mascot']} {logic.team_identity(t)['display']}",
+            "Stage": t["stage"], "Capital": f"${t['capital']:,.0f}",
             "Credits": round(t["evidence_credits"], 1), "Valuation": f"${val['valuation']:,.0f}",
             "Evidence-backed": f"{val['evidence_coverage']*100:.0f}%",
             "Evidence items": esum["count"], "Behavioral": esum["behavioral"],

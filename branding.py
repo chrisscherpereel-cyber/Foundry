@@ -59,6 +59,26 @@ def header(subtitle=None):
     st.markdown(html, unsafe_allow_html=True)
 
 
+def avatar_html(color, mascot, size=40, border=True):
+    """A team's identity badge: a coloured disc with the team's mascot emoji."""
+    bd = "box-shadow:0 0 0 2px rgba(255,255,255,.5);" if border else ""
+    return _oneline(
+        f'<span style="display:inline-flex;width:{size}px;height:{size}px;border-radius:50%;'
+        f'background:{color};align-items:center;justify-content:center;'
+        f'font-size:{int(size*0.55)}px;{bd}vertical-align:middle;">{mascot}</span>')
+
+
+def team_badge_html(team, size=40):
+    """Avatar + display name inline, using the team's chosen identity."""
+    import logic  # local import to avoid a cycle at module load
+    ident = logic.team_identity(team)
+    return _oneline(
+        '<div style="display:flex;align-items:center;gap:10px;">'
+        + avatar_html(ident["color"], ident["mascot"], size)
+        + f'<div style="font-size:{max(14, int(size*0.42))}px;font-weight:700;">'
+        + f'{ident["display"]}</div></div>')
+
+
 def sidebar_logo(caption=""):
     """Compact logo + wordmark for a sidebar."""
     html = (

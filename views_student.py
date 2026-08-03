@@ -11,6 +11,7 @@ import streamlit as st
 import db
 import content
 import logic
+import branding
 import canvas_art
 
 # A simple, recognizable AI badge (a colored dot + "AI") on every AI-logging control.
@@ -418,6 +419,19 @@ def round_briefing(team):
     topics = logic.topics_for_round(cur)
     titles = " + ".join(t["title"] for t in topics) if topics else ""
     st.subheader(f"📅 Round Briefing — Round {cur}" + (f": {titles}" if titles else ""))
+
+    # ---- Narrative arc: chapter banner + the investor's voice ---------------
+    _pidx, _pname, _pemoji, _ptheme = logic.story_phase(cur)
+    inv = content.INVESTOR
+    st.markdown(
+        f"<div style='border-left:4px solid #4f46e5;padding:8px 14px;margin:2px 0 10px;"
+        f"background:rgba(79,70,229,.06);border-radius:6px;'>"
+        f"<b>{_pemoji} Chapter {_pidx+1}: {_pname}</b> — {_ptheme}</div>",
+        unsafe_allow_html=True)
+    with st.container(border=True):
+        st.markdown(f"💬 **{inv['name']}**, {inv['title']}:")
+        st.markdown(f"> _{logic.investor_line(team['id'])}_")
+
     _guide(
         "The simulation adds complexity round by round. In the first class session your "
         "instructor introduces new concepts; the simulation round is where you apply them. "
@@ -887,10 +901,44 @@ def founder_skills(team):
 # --------------------------------------------------------------------------- #
 # Dashboard
 # --------------------------------------------------------------------------- #
+def _team_identity_editor(team):
+    """Pick a team name, colour, and mascot — ownership makes it theirs."""
+    ident = logic.team_identity(team)
+    was_set = db.has_ack(team["id"], "identity_set")
+    with st.expander("🎨 Team identity — pick your name, color & mascot", expanded=not was_set):
+        cc = st.columns([1, 4])
+        cc[0].markdown(branding.avatar_html(ident["color"], ident["mascot"], 68),
+                       unsafe_allow_html=True)
+        with cc[1]:
+            name = st.text_input("Team name", value=ident["display"], key=f"idname_{team['id']}")
+            k1, k2 = st.columns(2)
+            cidx = next((i for i, (n, h) in enumerate(content.TEAM_COLORS)
+                         if h == ident["color"]), 0)
+            color = k1.selectbox("Color", content.TEAM_COLORS, index=cidx,
+                                 format_func=lambda t: t[0], key=f"idcolor_{team['id']}")
+            midx = content.TEAM_MASCOTS.index(ident["mascot"]) \
+                if ident["mascot"] in content.TEAM_MASCOTS else 0
+            mascot = k2.selectbox("Mascot", content.TEAM_MASCOTS, index=midx,
+                                  key=f"idmascot_{team['id']}")
+        st.markdown("Preview: "
+                    + branding.avatar_html(color[1], mascot, 28)
+                    + f" <b>{name or ident['display']}</b>", unsafe_allow_html=True)
+        if st.button("Save identity", type="primary", key=f"idsave_{team['id']}"):
+            db.update_team(team["id"], display_name=(name.strip() or ident["display"]),
+                           color=color[1], mascot=mascot)
+            db.set_ack(team["id"], "identity_set")
+            st.success("Looking sharp! 🎉")
+            st.rerun()
+
+
 def dashboard(team):
-    st.subheader(f"🏭 {team['name']} — Venture Dashboard")
+    ident = logic.team_identity(team)
+    st.markdown(branding.team_badge_html(team, 52) + " <span style='opacity:.6'>— Venture "
+                "Dashboard</span>", unsafe_allow_html=True)
+    lvl, tot = logic.founder_level(team["id"])
     st.caption(f"Stage: **{team['stage']}**  ·  Round {db.current_round()}  ·  "
-               f"Join code `{team['join_code']}`")
+               f"🧑‍🚀 Founder Level {lvl}  ·  Join code `{team['join_code']}`")
+    _team_identity_editor(team)
     _guide(
         "This is your venture's home screen. It shows what you own (top row), what your "
         "venture is worth, how the Director has scored you, and where your biggest risks "
@@ -997,6 +1045,32 @@ def dashboard(team):
 # --------------------------------------------------------------------------- #
 def progress(team):
     st.subheader("📈 Learning Progress")
+
+    # ---- Trophy case: level, streak, badges ---------------------------------
+    lvl, tot = logic.founder_level(team["id"])
+    streak = logic.commit_streak(team["id"])
+    badges = logic.badge_progress(team["id"])
+    earned = [b for b in badges if b["earned"]]
+    tc1, tc2, tc3 = st.columns(3)
+    tc1.metric("🧑‍🚀 Founder Level", lvl, help="Grows as your founders train and learn by doing.")
+    tc2.metric("🏅 Badges", f"{len(earned)}/{len(badges)}")
+    tc3.metric("🔥 Commit streak", f"{streak} round(s)",
+               help="Consecutive rounds you committed your work.")
+    st.markdown("**🏆 Trophy case**")
+    cols = st.columns(5)
+    for i, b in enumerate(badges):
+        with cols[i % 5]:
+            if b["earned"]:
+                st.markdown(f"<div style='font-size:30px'>{b['emoji']}</div>"
+                            f"<b>{b['name']}</b>", unsafe_allow_html=True)
+                st.caption(b["desc"])
+            else:
+                st.markdown("<div style='font-size:30px;filter:grayscale(1);opacity:.35'>"
+                            f"{b['emoji']}</div><span style='opacity:.5'>{b['name']}</span>",
+                            unsafe_allow_html=True)
+                st.caption("🔒 " + b["desc"])
+    st.divider()
+
     _guide(
         "This is your learning made visible — not a score to game, but a mirror. It tracks how "
         "your evidence is getting stronger, how much of your model you've actually tested, how "
@@ -2054,10 +2128,11 @@ def market_events(team):
     for e in evs:
         scope = "All teams" if e["team_id"] is None else "Your team"
         icon = "✅" if e["resolved"] else "🔔"
+        intro, tail = logic.story_event_text(e["category"], e["exposes"])
         with st.expander(f"{icon} Round {e['round']} · {e['category']} · {scope}"):
-            st.write(f"**Event:** {e['text']}")
+            st.markdown(f"**{intro}** {e['text']}{tail}")
             if e["exposes"]:
-                st.caption(f"Assumption exposed: {e['exposes']}")
+                st.caption(f"🎯 Assumption exposed: {e['exposes']} — check your evidence for it.")
 
 
 # --------------------------------------------------------------------------- #

@@ -375,6 +375,16 @@ def init_db():
         # Multi-game: teams belong to a game (cohort); each game advances on its own.
         _ensure_column(conn, "teams", "game_id", "INTEGER")
         _ensure_column(conn, "teams", "roster", "TEXT")       # JSON member roster
+        # Team identity — a chosen display name, colour, and mascot.
+        _ensure_column(conn, "teams", "display_name", "TEXT")
+        _ensure_column(conn, "teams", "color", "TEXT")
+        _ensure_column(conn, "teams", "mascot", "TEXT")
+        conn.execute("""CREATE TABLE IF NOT EXISTS badges (
+            team_id  INTEGER NOT NULL,
+            code     TEXT NOT NULL,
+            earned_at TEXT,
+            PRIMARY KEY (team_id, code),
+            FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE)""")
         # Decision Journal: one round-adaptive focus question per entry.
         _ensure_column(conn, "reflections", "focus_prompt", "TEXT")
         _ensure_column(conn, "reflections", "focus_answer", "TEXT")
@@ -1627,5 +1637,28 @@ def list_metrics_history(team_id):
             (team_id,),
         ).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# Badges — earned achievements (first-earned time is recorded for celebrations).
+# --------------------------------------------------------------------------- #
+def get_earned_badges(team_id):
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT code FROM badges WHERE team_id=?", (team_id,)).fetchall()
+        return {r["code"] for r in rows}
+    finally:
+        conn.close()
+
+
+def award_badge(team_id, code):
+    conn = get_conn()
+    try:
+        conn.execute("INSERT OR IGNORE INTO badges(team_id, code, earned_at) VALUES(?,?,?)",
+                     (team_id, code, now()))
+        conn.commit()
     finally:
         conn.close()

@@ -248,10 +248,24 @@ def student_shell():
     _sync_active_game()
     team = db.get_team(team["id"])   # round may have advanced
 
+    # Celebrate any newly-earned badges.
+    for code in logic.sync_badges(team["id"]):
+        b = content.BADGE_BY_CODE.get(code, {})
+        try:
+            st.toast(f"🏅 Badge unlocked: {b.get('emoji','')} {b.get('name', code)}!")
+        except Exception:
+            pass
+
+    ident = logic.team_identity(team)
+    level, _ = logic.founder_level(team["id"])
+    streak = logic.commit_streak(team["id"])
+    n_badges = len(logic.team_badges(team["id"]))
     with st.sidebar:
         branding.sidebar_logo()
-        st.header(f"🎓 {team['name']}")
-        st.caption(f"Round {db.current_round()} · {team['stage']}")
+        st.markdown(branding.team_badge_html(team, 44), unsafe_allow_html=True)
+        st.caption(f"Round {db.current_round()} · {team['stage']}  ·  "
+                   f"🧑‍🚀 Lvl {level} · 🏅 {n_badges}"
+                   + (f" · 🔥 {streak}-round streak" if streak >= 2 else ""))
         st.metric("Credits", f"{team['evidence_credits']:.1f}")
         _sidebar_todo(team)
         _sidebar_commit_status(team)

@@ -1426,6 +1426,125 @@ def metrics_trend(team_id):
     return sorted(out, key=lambda o: o["round"])
 
 
+# --------------------------------------------------------------------------- #
+# Engagement — team identity, badges/streaks/levels, and the narrative arc
+# --------------------------------------------------------------------------- #
+def team_identity(team):
+    """Display name, colour, and mascot for a team (with sensible defaults)."""
+    return {
+        "display": (team.get("display_name") or team.get("name") or "Team"),
+        "color": team.get("color") or content.DEFAULT_TEAM_COLOR,
+        "mascot": team.get("mascot") or content.DEFAULT_TEAM_MASCOT,
+    }
+
+
+def commit_streak(team_id):
+    """Consecutive most-recent rounds the team committed (an on-time streak)."""
+    cur = db.current_round()
+    streak = 0
+    for r in range(cur, 0, -1):
+        c = db.get_commitment(team_id, r)
+        if c and c["committed"]:
+            streak += 1
+        else:
+            break
+    return streak
+
+
+def founder_level(team_id):
+    """A team 'founder level' that grows with skill (training + learning by doing).
+    Returns (level, total_effective_skill)."""
+    total = sum(effective_skill(team_id, k) for k in content.FOUNDER_SKILL_KEYS)
+    return 1 + int(total // 6), total
+
+
+def team_badges(team_id):
+    """Set of badge codes the team has EARNED, computed from current state."""
+    codes = set()
+    ev = db.list_evidence(team_id)
+    es = evidence_summary(team_id)
+    if ev:
+        codes.add("first_evidence")
+    if any((e["strength"] or 0) >= 9 for e in ev):
+        codes.add("paying_customer")
+    if es["count"] >= 4 and es["behavioral"] / es["count"] >= 0.5:
+        codes.add("behavior_beats_opinion")
+    piv = evidence_based_pivots(team_id)
+    if piv["refuted"] or any(a["status"] == "Refuted" for a in db.list_assumptions(team_id)):
+        codes.add("killed_assumption")
+    cal = calibration_summary(team_id)
+    if cal["n"] >= 2 and cal["overconfidence_gap"] is not None \
+            and abs(cal["overconfidence_gap"]) <= 10:
+        codes.add("well_calibrated")
+    ctypes = {c["ctype"] for c in db.list_canvases(team_id)}
+    if {"customer_profile", "vpc", "bmc"} <= ctypes:
+        codes.add("model_builder")
+    if piv["mini"]:
+        codes.add("course_corrector")
+    if any(l["status"] == "Verified" for l in db.list_ai_logs(team_id)):
+        codes.add("ai_auditor")
+    if commit_streak(team_id) >= 3:
+        codes.add("on_a_roll")
+    if evidence_coverage(team_id) >= 0.6:
+        codes.add("evidence_machine")
+    return codes
+
+
+def sync_badges(team_id):
+    """Award any newly-earned badges; return the set earned THIS check (for a toast)."""
+    earned = db.get_earned_badges(team_id)
+    current = team_badges(team_id)
+    new = current - earned
+    for c in new:
+        db.award_badge(team_id, c)
+    return new
+
+
+def badge_progress(team_id):
+    """All badges with earned/locked state, for the trophy case."""
+    earned = team_badges(team_id)
+    out = []
+    for code, name, emoji, desc in content.BADGES:
+        out.append({"code": code, "name": name, "emoji": emoji, "desc": desc,
+                    "earned": code in earned})
+    return out
+
+
+# ---- Narrative arc + investor persona -------------------------------------- #
+def story_phase(rnd=None):
+    rnd = db.current_round() if rnd is None else rnd
+    return content.narrative_phase(rnd, total_rounds())
+
+
+def investor_line(team_id):
+    """Vera Sloan's in-character nudge, chosen by how the team is actually doing."""
+    es = evidence_summary(team_id)
+    risk = assumption_risk_report(team_id)
+    piv = evidence_based_pivots(team_id)
+    cov = evidence_coverage(team_id)
+    lines = content.INVESTOR_LINES
+    if cov >= 0.6:
+        return lines["pitch_ready"]
+    if risk["exposed"]:
+        return lines["risky_untested"]
+    if es["count"] == 0:
+        return lines["no_evidence"]
+    if es["count"] >= 3 and es["opinion"] > es["behavioral"]:
+        return lines["opinion_heavy"]
+    if piv["total"]:
+        return lines["pivoted"]
+    if es["behavioral"] >= 2:
+        return lines["good_evidence"]
+    return lines["no_evidence"]
+
+
+def story_event_text(category, exposes):
+    """Wrap a market event in the narrative voice while still naming the assumption."""
+    intro = content.EVENT_STORY_INTRO.get(category, "A twist in the story:")
+    tail = f" It puts pressure on your assumption: “{exposes}.”" if exposes else ""
+    return intro, tail
+
+
 def quick_setup_teams(n_teams, difficulty, opportunity_mode="distinct",
                       opportunity_choice=None, founder_mode="balanced",
                       name_prefix="Team", clear_existing=False):
@@ -2290,8 +2409,12 @@ def generate_feedback(team_id, round_no=None, scores=None):
     weak = [d for d, s in ranked[::-1][:3] if s <= 55]
     pred_val = valuation_from_scores(team_id, scores)
 
+    _pi, _pn, _pe, _pt = content.narrative_phase(rnd, total_rounds())
     lines = [f"Hi {team['name']},", "",
-             f"Here's your Round {rnd} venture review from the Foundry.", ""]
+             f"{_pe} Chapter {_pi + 1} — {_pn}. {_pt}", "",
+             f"Here's your Round {rnd} venture review.", ""]
+    lines.append(f"💬 {investor_line(team_id)}")
+    lines.append("")
     lines.append(f"Predicted venture valuation: ${pred_val:,.0f}")
     lines.append("")
     if strengths:
@@ -2341,7 +2464,7 @@ def generate_feedback(team_id, round_no=None, scores=None):
             lines.append(f"  • {h}")
 
     lines.append("")
-    lines.append("— The Venture Foundry Director")
+    lines.append(content.INVESTOR["sign"])
     return {"subject": f"Round {rnd} venture review — {team['name']}",
             "body": "\n".join(lines)}
 

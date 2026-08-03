@@ -1381,3 +1381,89 @@ AI_PROTOCOL_SUMMARY = (
     "- **T — Translate to evidence**: what strength did the real test produce?\n\n"
     "Log every AI use on the **AI Assist Log** page and mark it Verified only after a real test."
 )
+
+# --------------------------------------------------------------------------- #
+# Engagement: team identity, badges, and the narrative arc
+# --------------------------------------------------------------------------- #
+TEAM_MASCOTS = ["🚀", "🦊", "🦉", "🐝", "🐙", "🦁", "🐢", "🦄", "🐉", "🦈",
+                "🐬", "🦅", "🐺", "🐧", "🦖", "🌟", "⚡", "🔥", "🌱", "🧭"]
+TEAM_COLORS = [
+    ("Indigo", "#4f46e5"), ("Teal", "#0d9488"), ("Amber", "#d97706"), ("Rose", "#e11d48"),
+    ("Emerald", "#059669"), ("Violet", "#7c3aed"), ("Sky", "#0284c7"), ("Slate", "#475569"),
+    ("Fuchsia", "#c026d3"), ("Orange", "#ea580c"),
+]
+DEFAULT_TEAM_COLOR = "#4f46e5"
+DEFAULT_TEAM_MASCOT = "🚀"
+
+# Behavioral achievements — reward the habits we want, not just the score.
+# (code, name, emoji, description)
+BADGES = [
+    ("first_evidence", "First Evidence", "🔍", "Logged your first piece of real evidence."),
+    ("paying_customer", "First Paying Customer", "💳",
+     "Logged a binding commitment — a customer paid, pre-ordered, or signed."),
+    ("behavior_beats_opinion", "Behavior Beats Opinion", "👣",
+     "Most of your evidence is behavioral (what customers did), not opinion."),
+    ("killed_assumption", "Killed a Bad Assumption", "🎯",
+     "Refuted an important assumption — productive failure is progress."),
+    ("well_calibrated", "Well-Calibrated", "🎚️",
+     "Your stated confidence matched how often you were actually right."),
+    ("model_builder", "Model Builder", "🧩",
+     "Built the core canvases of your business model."),
+    ("course_corrector", "Course Corrector", "🔄",
+     "Logged an evidence-based course correction (a mini-pivot)."),
+    ("ai_auditor", "AI Auditor", "🤖",
+     "Verified your AI use instead of trusting it — information literacy."),
+    ("on_a_roll", "On a Roll", "🔥",
+     "Committed your round on time three rounds in a row."),
+    ("evidence_machine", "Evidence Machine", "📚",
+     "Reached strong evidence coverage of your venture (60%+)."),
+]
+BADGE_BY_CODE = {b[0]: {"name": b[1], "emoji": b[2], "desc": b[3]} for b in BADGES}
+
+# The investor persona who narrates the journey.
+INVESTOR = {
+    "name": "Vera Sloan",
+    "title": "Managing Partner, Foundry Capital",
+    "sign": "— Vera Sloan, Foundry Capital",
+}
+
+# The venture journey, told in phases. (name, emoji, one-line theme)
+NARRATIVE_PHASES = [
+    ("Seed", "🌱", "Every venture starts as a hunch. Find a real problem worth solving."),
+    ("Discovery", "🔎", "Get out of the building — turn opinions into evidence."),
+    ("Build", "🛠️", "Shape an offer that fits what customers actually do."),
+    ("Traction", "📈", "Test the risky bets; let evidence, not love for the idea, steer you."),
+    ("Pitch", "🎤", "Assemble the case — defend the model with proof, not persuasion."),
+]
+
+# Vera's in-character lines, chosen by how a team is doing.
+INVESTOR_LINES = {
+    "no_evidence": "I've read the pitch. Now show me a customer who did something about it — "
+                   "opinions don't move me.",
+    "opinion_heavy": "Lots of people 'love the idea.' Love is cheap. Find me behavior — someone "
+                     "who paid, signed, or showed up.",
+    "good_evidence": "Now we're talking. Real behavior beats a beautiful deck every time — keep "
+                     "stacking evidence.",
+    "risky_untested": "You're sitting on a bet that could sink this. Test the assumption that "
+                      "scares you most, and do it cheaply.",
+    "pivoted": "Changing your mind on evidence isn't failure — it's the job. Good.",
+    "pitch_ready": "This is starting to look investable. Tighten the story: what you know, how "
+                   "you know it, and what's still a bet.",
+}
+
+# Story-styled market-event openers by category (the event still names the assumption).
+EVENT_STORY_INTRO = {
+    "Customer": "Word from the field:",
+    "Competitive": "A rival makes a move:",
+    "Operational": "Reality intrudes:",
+    "Regulatory & Ethical": "The rules shift:",
+    "Financial": "The money side bites:",
+}
+
+
+def narrative_phase(rnd, total_rounds):
+    """(index, name, emoji, theme) for the current round's story phase."""
+    total = max(1, int(total_rounds))
+    idx = min(len(NARRATIVE_PHASES) - 1, int((int(rnd) - 1) / total * len(NARRATIVE_PHASES)))
+    name, emoji, theme = NARRATIVE_PHASES[idx]
+    return idx, name, emoji, theme
