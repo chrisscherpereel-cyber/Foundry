@@ -388,6 +388,45 @@ def answer_quality(text, concept="", team_id=None):
             "feedback": _quality_feedback(checks)}
 
 
+def answer_grade(text, concept="", team_id=None):
+    """Accurate, graded feedback for a written concept answer — distinguishing blank,
+    not-meaningful, developing, acceptable, and strong, instead of a generic 'almost'."""
+    q = answer_quality(text, concept, team_id)
+    c = q["checks"]
+    t = (text or "").strip()
+    if not t:
+        return {"level": "blank", "icon": "⬜", "ok": False, "quality": q,
+                "headline": "Blank — nothing written yet. Add a sentence or two applying "
+                            "the idea to your venture."}
+    if not c["complete"]:
+        return {"level": "incomplete", "icon": "⬜", "ok": False, "quality": q,
+                "headline": "Incomplete — too short. Give a full sentence or two."}
+    if not c["meaningful"]:
+        return {"level": "not_meaningful", "icon": "⚠️", "ok": False, "quality": q,
+                "headline": "This isn't meaningful yet — it reads like filler or repeated "
+                            "words. Say something specific about your venture."}
+    substance = c["uses_concepts"] + c["relevant"] + c["evidence_based"]
+    if substance == 0:
+        return {"level": "developing", "icon": "🟡", "ok": False, "quality": q,
+                "headline": "Getting there — now connect it to the course concepts, YOUR "
+                            "venture, or your evidence."}
+    missing = [lbl for k, lbl in (("uses_concepts", "the course concepts"),
+                                  ("relevant", "your own venture"),
+                                  ("evidence_based", "evidence")) if not c[k]]
+    if not missing:
+        return {"level": "strong", "icon": "🌟", "ok": True, "quality": q,
+                "headline": "Excellent — complete, specific, and evidence-based."}
+    if len(missing) == 1:
+        join = missing[0]
+    elif len(missing) == 2:
+        join = " and ".join(missing)
+    else:
+        join = ", ".join(missing[:-1]) + ", and " + missing[-1]
+    return {"level": "acceptable", "icon": "✅", "ok": True, "quality": q,
+            "headline": "Acceptable — this counts. You could strengthen it by referencing "
+                        + join + "."}
+
+
 def _parse_concept_response(raw):
     """A stored concept answer may be JSON {quiz:[...], text:...} or legacy plain text."""
     raw = (raw or "").strip()

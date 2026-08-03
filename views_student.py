@@ -810,15 +810,19 @@ def _render_concept_question(team, rnd, concept, locked, carried=False):
             ["complete", "meaningful", "uses_concepts", "relevant", "evidence_based"]))
         quiz_ok = logic.concept_quiz_correct(concept, picks) if quiz else True
         quiz_answered = (not quiz) or all(p is not None for p in picks)
-        # Persistent status so it's always clear why it is / isn't covered.
+        grade = logic.answer_grade(text, concept, team["id"])
+        # Persistent, graded status so it's always clear where the answer stands.
         if not quiz_answered:
             st.info("⬜ Choose **True or False** above to finish this one.")
         elif not quiz_ok:
             st.error("⬜ The **true/false** isn't right yet — re-read the statement and try again.")
-        elif not q["ok"]:
-            st.warning("⬜ Almost — " + " ".join(q["feedback"]))
         else:
-            st.success("✅ This concept is covered.")
+            _fn = {"blank": st.info, "incomplete": st.info, "not_meaningful": st.warning,
+                   "developing": st.warning, "acceptable": st.success, "strong": st.success}
+            _fn.get(grade["level"], st.warning)(f"{grade['icon']} {grade['headline']}")
+            if grade["level"] in ("acceptable", "strong"):
+                st.caption("✅ Covered." if grade["level"] == "acceptable"
+                           else "🌟 Covered — top marks.")
 
 
 # --------------------------------------------------------------------------- #
