@@ -1803,7 +1803,10 @@ def ai_comment(prompt, system=None, cfg=None, timeout=25, return_error=False):
             url = f"{cfg['base'].rstrip('/')}/models/{cfg['model']}:generateContent"
             sys_txt = (system + "\n\n") if system else ""
             body = {"contents": [{"parts": [{"text": sys_txt + prompt}]}],
-                    "generationConfig": {"maxOutputTokens": 300, "temperature": 0.6}}
+                    # Gemini 2.5 spends output on hidden "thinking" by default, which
+                    # truncates short replies — disable it and give ample room.
+                    "generationConfig": {"maxOutputTokens": 800, "temperature": 0.6,
+                                         "thinkingConfig": {"thinkingBudget": 0}}}
             headers = {"Content-Type": "application/json", "x-goog-api-key": cfg["key"]}
             out = _http_json(url, body, headers, timeout)
             cands = out.get("candidates") or []
@@ -1811,13 +1814,15 @@ def ai_comment(prompt, system=None, cfg=None, timeout=25, return_error=False):
                 return _out(None, f"Model returned no text ({str(out)[:150]}).")
             parts = cands[0].get("content", {}).get("parts", [])
             text = "".join(p.get("text", "") for p in parts).strip()
+            if not text and cands[0].get("finishReason") == "MAX_TOKENS":
+                return _out(None, "Response was cut off (raise the model's token limit).")
             return _out(text or None, None if text else "Empty response from model.")
         # OpenAI-compatible (Groq / OpenAI / others)
         url = f"{cfg['base'].rstrip('/')}/chat/completions"
         msgs = ([{"role": "system", "content": system}] if system else []) \
             + [{"role": "user", "content": prompt}]
         body = {"model": cfg["model"], "messages": msgs,
-                "max_tokens": 300, "temperature": 0.6}
+                "max_tokens": 500, "temperature": 0.6}
         headers = {"Content-Type": "application/json",
                    "Authorization": f"Bearer {cfg['key']}"}
         out = _http_json(url, body, headers, timeout)
