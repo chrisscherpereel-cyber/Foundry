@@ -1726,7 +1726,7 @@ AI_PROVIDERS = {
              "keys_url": "https://console.groq.com/keys"},
     "gemini": {"label": "Google Gemini (free tier)", "kind": "gemini",
                "base": "https://generativelanguage.googleapis.com/v1beta",
-               "model": "gemini-1.5-flash", "keys_url": "https://aistudio.google.com/apikey"},
+               "model": "gemini-2.5-flash", "keys_url": "https://aistudio.google.com/apikey"},
     "openai": {"label": "OpenAI-compatible (custom base URL)", "kind": "openai",
                "base": "https://api.openai.com/v1", "model": "gpt-4o-mini",
                "keys_url": "https://platform.openai.com/api-keys"},
@@ -1768,49 +1768,71 @@ def ai_available():
 
 def _http_json(url, payload, headers, timeout=25):
     import urllib.request
+    import urllib.error
     import json as _json
     data = _json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return _json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return _json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8", "replace")[:300]
+        except Exception:
+            pass
+        raise RuntimeError(f"HTTP {e.code} — {body or e.reason}")
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Network error — {getattr(e, 'reason', e)}")
 
 
-def ai_comment(prompt, system=None, cfg=None, timeout=25):
+def ai_comment(prompt, system=None, cfg=None, timeout=25, return_error=False):
     """Return an LLM comment, or None if AI isn't configured or anything fails.
 
-    Deterministic feedback never depends on this — it's purely additive."""
+    Deterministic feedback never depends on this — it's purely additive. When
+    return_error=True, returns (text_or_None, error_message_or_None)."""
     cfg = cfg or get_ai_config()
+
+    def _out(text, err):
+        return (text, err) if return_error else text
+
     if not (cfg["enabled"] and cfg["key"]):
-        return None
+        return _out(None, "AI is off or no API key is set.")
     try:
         if cfg["kind"] == "gemini":
-            url = (f"{cfg['base'].rstrip('/')}/models/{cfg['model']}:generateContent"
-                   f"?key={cfg['key']}")
+            url = f"{cfg['base'].rstrip('/')}/models/{cfg['model']}:generateContent"
             sys_txt = (system + "\n\n") if system else ""
             body = {"contents": [{"parts": [{"text": sys_txt + prompt}]}],
-                    "generationConfig": {"maxOutputTokens": 260, "temperature": 0.6}}
-            out = _http_json(url, body, {"Content-Type": "application/json"}, timeout)
-            return out["candidates"][0]["content"]["parts"][0]["text"].strip()
+                    "generationConfig": {"maxOutputTokens": 300, "temperature": 0.6}}
+            headers = {"Content-Type": "application/json", "x-goog-api-key": cfg["key"]}
+            out = _http_json(url, body, headers, timeout)
+            cands = out.get("candidates") or []
+            if not cands:
+                return _out(None, f"Model returned no text ({str(out)[:150]}).")
+            parts = cands[0].get("content", {}).get("parts", [])
+            text = "".join(p.get("text", "") for p in parts).strip()
+            return _out(text or None, None if text else "Empty response from model.")
         # OpenAI-compatible (Groq / OpenAI / others)
         url = f"{cfg['base'].rstrip('/')}/chat/completions"
         msgs = ([{"role": "system", "content": system}] if system else []) \
             + [{"role": "user", "content": prompt}]
         body = {"model": cfg["model"], "messages": msgs,
-                "max_tokens": 260, "temperature": 0.6}
+                "max_tokens": 300, "temperature": 0.6}
         headers = {"Content-Type": "application/json",
                    "Authorization": f"Bearer {cfg['key']}"}
         out = _http_json(url, body, headers, timeout)
-        return out["choices"][0]["message"]["content"].strip()
-    except Exception:
-        return None
+        return _out(out["choices"][0]["message"]["content"].strip(), None)
+    except Exception as e:   # noqa: BLE001 — any failure degrades gracefully
+        return _out(None, str(e))
 
 
 def ai_test_key(cfg=None):
-    """Quick round-trip to validate the key. Returns (ok, message)."""
-    r = ai_comment("Reply with the single word: OK", cfg=cfg, timeout=20)
-    if r is None:
-        return False, "No response — check the key, model, and provider."
-    return True, f"Working ✓ (model replied: “{r[:40]}”)"
+    """Quick round-trip to validate the key. Returns (ok, message) with the real error."""
+    text, err = ai_comment("Reply with the single word: OK", cfg=cfg, timeout=20,
+                           return_error=True)
+    if text:
+        return True, f"Working ✓ (model replied: “{text[:40]}”)"
+    return False, err or "No response — check the key, model, and provider."
 
 
 def ai_round_comment(team_id, round_no=None):

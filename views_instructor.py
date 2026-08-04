@@ -42,17 +42,27 @@ def _ai_feedback_settings():
         provs = list(logic.AI_PROVIDERS.keys())
         prov = st.selectbox("Provider", provs,
                             index=provs.index(cfg["provider"]),
-                            format_func=lambda k: logic.AI_PROVIDERS[k]["label"])
+                            format_func=lambda k: logic.AI_PROVIDERS[k]["label"],
+                            key="ai_prov_sel")
         pinfo = logic.AI_PROVIDERS[prov]
-        st.caption(f"Get a free key: {pinfo['keys_url']}")
-        key = st.text_input("API key", value=cfg["key"], type="password",
+        st.caption(f"Get a free key: {pinfo['keys_url']}  ·  This provider's default model: "
+                   f"**{pinfo['model']}**")
+        # When the provider changes, default the model/base to that provider's values
+        # (per-provider widget keys keep each provider's fields independent).
+        same = (prov == cfg["provider"])
+        key = st.text_input("API key", value=(cfg["key"] if same else ""), type="password",
+                            key=f"ai_key_{prov}",
                             help="Stored with the game settings. Use a free-tier key; treat it "
                                  "like a password.")
         c1, c2 = st.columns(2)
-        model = c1.text_input("Model", value=cfg["model"],
+        model = c1.text_input("Model", value=(cfg["model"] if same else pinfo["model"]),
+                              key=f"ai_model_{prov}",
                               help=f"Default for this provider: {pinfo['model']}")
-        base = c2.text_input("Base URL (OpenAI-compatible only)", value=cfg["base"])
-        enabled = st.checkbox("Enable AI comments", value=cfg["enabled"])
+        base = c2.text_input("Base URL (OpenAI-compatible only)",
+                             value=(cfg["base"] if same else pinfo["base"]),
+                             key=f"ai_base_{prov}")
+        enabled = st.checkbox("Enable AI comments", value=(cfg["enabled"] if same else False),
+                              key=f"ai_en_{prov}")
         st.caption("⚠️ When enabled, the team's summary metrics are sent to the provider to "
                    "generate the comment. Don't include student names; free tiers have rate limits.")
         b1, b2 = st.columns(2)
