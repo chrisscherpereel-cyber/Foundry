@@ -135,6 +135,7 @@ STUDENT_PAGES = {
     "Inbox": vs.inbox,
     "Dashboard": vs.dashboard,
     "Progress": vs.progress,
+    "Leaderboard": vs.leaderboard,
     "Founder & Opportunity": vs.founder_opportunity,
     "Founder & Team": vs.founder_skills,
     "Canvases": vs.canvases,
@@ -147,6 +148,7 @@ STUDENT_PAGES = {
     "Concept Check": vs.concept_check,
     "AI Assist Log": vs.ai_assist,
     "Decision Journal": vs.reflections,
+    "Demo Day": vs.demo_day,
 }
 
 
@@ -302,6 +304,8 @@ INSTRUCTOR_PAGES = {
     "Pivot Committee": vi.pivot_committee,
     "Dashboard Scoring": vi.scoring,
     "Round Scores": vi.round_scores,
+    "Misconception Radar": vi.misconception_radar,
+    "Demo Day": vi.demo_day_admin,
 }
 
 

@@ -1605,6 +1605,116 @@ def story_event_text(category, exposes):
     return intro, tail
 
 
+# ---- Cohort leaderboard ---------------------------------------------------- #
+LEADERBOARD_METRICS = {
+    "round_score": "Round score",
+    "valuation": "Venture valuation",
+    "coverage": "Evidence coverage",
+}
+
+
+def leaderboard(game_id=None, metric="round_score"):
+    """Ranked standings for a game's teams by the chosen metric (highest first)."""
+    gid = game_id if game_id is not None else db.active_game_id()
+    rnd = db.current_round()
+    rows = []
+    for t in db.list_teams(gid):
+        rs = round_score(t["id"], rnd)
+        val = compute_valuation(t["id"])
+        rows.append({
+            "team": t, "round_score": rs["score"], "valuation": val["valuation"],
+            "coverage": val["evidence_coverage"], "badges": len(team_badges(t["id"])),
+        })
+    key = metric if metric in ("round_score", "valuation", "coverage") else "round_score"
+    rows.sort(key=lambda r: r[key], reverse=True)
+    for i, r in enumerate(rows):
+        r["rank"] = i + 1
+    return rows
+
+
+# ---- Demo Day / Evidence Exchange ------------------------------------------ #
+DEMO_VOTES_PER_TEAM = 3
+
+
+def demo_is_open(game_id=None):
+    gid = game_id if game_id is not None else db.active_game_id()
+    return db.get_setting(f"demo_open:{gid}", "0") == "1"
+
+
+def set_demo_open(game_id, on):
+    db.set_setting(f"demo_open:{game_id}", "1" if on else "0")
+
+
+def strongest_evidence(team_id):
+    ev = db.list_evidence(team_id)
+    return max(ev, key=lambda e: e["strength"]) if ev else None
+
+
+def demo_results(game_id=None):
+    """Peer-vote tally joined to teams, ranked."""
+    gid = game_id if game_id is not None else db.active_game_id()
+    tally = db.vote_tally(gid)
+    rows = [{"team": t, "votes": tally.get(t["id"], 0)} for t in db.list_teams(gid)]
+    rows.sort(key=lambda r: r["votes"], reverse=True)
+    for i, r in enumerate(rows):
+        r["rank"] = i + 1
+    return rows
+
+
+# ---- Spaced retrieval ------------------------------------------------------ #
+def spaced_review_concepts(rnd, n=2):
+    """1–2 concepts from EARLIER rounds (with a quiz) to re-test for retrieval practice."""
+    if rnd <= 1:
+        return []
+    pool = []
+    for r in range(1, rnd):
+        for c in round_concepts(r):
+            if content.CONCEPT_QUIZ.get(c) and c not in pool:
+                pool.append(c)
+    if not pool:
+        return []
+    picks = []
+    for i in range(min(n, len(pool))):
+        picks.append(pool[(rnd * 7 + i * 3) % len(pool)])
+    return list(dict.fromkeys(picks))
+
+
+# ---- Instructor misconception radar ---------------------------------------- #
+def misconception_report(game_id=None):
+    """Which concepts teams get WRONG most (from stored true/false), plus how many
+    important assumptions remain untested across the cohort."""
+    gid = game_id if game_id is not None else db.active_game_id()
+    teams = db.list_teams(gid)
+    stats = {}
+    for t in teams:
+        for r in range(1, total_rounds() + 1):
+            answers = db.get_round_answers(t["id"], r)
+            for c, raw in answers.items():
+                if not content.CONCEPT_QUIZ.get(c):
+                    continue
+                parsed = _parse_concept_response(raw)
+                if parsed["quiz"] is None:
+                    continue
+                s = stats.setdefault(c, {"answered": 0, "wrong": 0})
+                s["answered"] += 1
+                if not concept_quiz_correct(c, parsed["quiz"]):
+                    s["wrong"] += 1
+    concepts = [{"concept": c, "answered": s["answered"], "wrong": s["wrong"],
+                 "wrong_rate": (s["wrong"] / s["answered"] if s["answered"] else 0)}
+                for c, s in stats.items()]
+    concepts.sort(key=lambda x: (x["wrong_rate"], x["wrong"]), reverse=True)
+    total_imp = untested = 0
+    exposed_by_concept = {}
+    for t in teams:
+        for a in db.list_assumptions(t["id"]):
+            if a["importance"] >= COVERAGE_IMPORTANCE_MIN:
+                total_imp += 1
+                if a["status"] in ("Untested", "Ignored"):
+                    untested += 1
+    return {"concepts": concepts, "teams": len(teams),
+            "total_important": total_imp, "untested_important": untested}
+
+
 def quick_setup_teams(n_teams, difficulty, opportunity_mode="distinct",
                       opportunity_choice=None, founder_mode="balanced",
                       name_prefix="Team", clear_existing=False):

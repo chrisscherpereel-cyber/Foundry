@@ -385,6 +385,22 @@ def init_db():
             earned_at TEXT,
             PRIMARY KEY (team_id, code),
             FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE)""")
+        # Demo Day / Evidence Exchange finale — pitches + peer votes.
+        conn.execute("""CREATE TABLE IF NOT EXISTS demo_pitches (
+            team_id       INTEGER PRIMARY KEY,
+            game_id       INTEGER,
+            headline      TEXT,
+            pitch         TEXT,
+            best_evidence TEXT,
+            ask           TEXT,
+            updated_at    TEXT,
+            FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE)""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS demo_votes (
+            game_id       INTEGER NOT NULL,
+            voter_team_id INTEGER NOT NULL,
+            votee_team_id INTEGER NOT NULL,
+            created_at    TEXT,
+            PRIMARY KEY (game_id, voter_team_id, votee_team_id))""")
         # Decision Journal: one round-adaptive focus question per entry.
         _ensure_column(conn, "reflections", "focus_prompt", "TEXT")
         _ensure_column(conn, "reflections", "focus_answer", "TEXT")
@@ -1660,5 +1676,97 @@ def award_badge(team_id, code):
         conn.execute("INSERT OR IGNORE INTO badges(team_id, code, earned_at) VALUES(?,?,?)",
                      (team_id, code, now()))
         conn.commit()
+    finally:
+        conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# Demo Day — pitches and peer votes
+# --------------------------------------------------------------------------- #
+def save_pitch(team_id, game_id, headline, pitch, best_evidence, ask):
+    conn = get_conn()
+    try:
+        conn.execute(
+            """INSERT INTO demo_pitches(team_id, game_id, headline, pitch, best_evidence,
+                                        ask, updated_at)
+               VALUES(?,?,?,?,?,?,?)
+               ON CONFLICT(team_id) DO UPDATE SET
+                 game_id=excluded.game_id, headline=excluded.headline, pitch=excluded.pitch,
+                 best_evidence=excluded.best_evidence, ask=excluded.ask,
+                 updated_at=excluded.updated_at""",
+            (team_id, game_id, headline, pitch, best_evidence, ask, now()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_pitch(team_id):
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT * FROM demo_pitches WHERE team_id=?", (team_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_pitches(game_id):
+    conn = get_conn()
+    try:
+        rows = conn.execute("SELECT * FROM demo_pitches WHERE game_id=?", (game_id,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def cast_vote(game_id, voter_team_id, votee_team_id):
+    conn = get_conn()
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO demo_votes(game_id, voter_team_id, votee_team_id, created_at) "
+            "VALUES(?,?,?,?)", (game_id, voter_team_id, votee_team_id, now()))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def remove_vote(game_id, voter_team_id, votee_team_id):
+    conn = get_conn()
+    try:
+        conn.execute("DELETE FROM demo_votes WHERE game_id=? AND voter_team_id=? "
+                     "AND votee_team_id=?", (game_id, voter_team_id, votee_team_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def clear_votes(game_id, voter_team_id):
+    conn = get_conn()
+    try:
+        conn.execute("DELETE FROM demo_votes WHERE game_id=? AND voter_team_id=?",
+                     (game_id, voter_team_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def votes_by_voter(game_id, voter_team_id):
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT votee_team_id FROM demo_votes WHERE game_id=? AND voter_team_id=?",
+            (game_id, voter_team_id)).fetchall()
+        return {r["votee_team_id"] for r in rows}
+    finally:
+        conn.close()
+
+
+def vote_tally(game_id):
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT votee_team_id, COUNT(*) AS n FROM demo_votes WHERE game_id=? "
+            "GROUP BY votee_team_id", (game_id,)).fetchall()
+        return {r["votee_team_id"]: r["n"] for r in rows}
     finally:
         conn.close()

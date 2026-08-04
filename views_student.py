@@ -52,6 +52,39 @@ def _why(tool):
             unsafe_allow_html=True)
 
 
+def _exemplar_customer_profile():
+    ex = content.EXEMPLAR_CUSTOMER_PROFILE
+    with st.expander("📗 Worked example — a weak vs. a strong Customer Profile"):
+        c1, c2 = st.columns(2)
+        c1.markdown("**❌ Weak (vague wishes)**")
+        for k, v in ex["weak"].items():
+            c1.markdown(f"- **{k}:** {v}")
+        c2.markdown("**✅ Strong (specific & checkable)**")
+        for k, v in ex["strong"].items():
+            c2.markdown(f"- **{k}:** {v}")
+        st.caption(ex["note"])
+
+
+def _exemplar_evidence():
+    ex = content.EXEMPLAR_EVIDENCE
+    with st.expander("📗 Worked example — weak vs. strong evidence (and what an LOI looks like)"):
+        st.markdown(f"**❌ Weak:** {ex['weak']}")
+        st.markdown(f"**✅ Strong:** {ex['strong']}")
+        st.info(ex["loi"])
+        st.caption(ex["note"])
+
+
+def _exemplar_pivot():
+    ex = content.EXEMPLAR_PIVOT
+    with st.expander("📗 Worked example — an annotated, evidence-based pivot"):
+        st.markdown(f"**Original assumption:** {ex['original']}")
+        st.markdown(f"**Evidence that challenged it:** {ex['evidence']}")
+        st.markdown(f"**Proposed change:** {ex['change']}")
+        st.markdown(f"**New assumptions to test:** {ex['new_assumptions']}")
+        for a in ex["annotations"]:
+            st.markdown(a)
+
+
 def _progress_ring(done, total, size=64):
     """An SVG donut showing round completion."""
     frac = (done / total) if total else 1.0
@@ -749,6 +782,51 @@ def concept_check(team):
         for c in carried:
             _render_concept_question(team, c["round"], c["concept"], locked, carried=True)
 
+    _spaced_review(team, cur, locked)
+
+
+def _autosave_review(team_id, rnd, concept, key):
+    import json as _json
+    v = st.session_state.get(key)
+    pick = None if v is None else (v == "True")
+    db.set_round_answer(team_id, rnd, concept, _json.dumps({"quiz": [pick], "text": ""}))
+
+
+def _spaced_review(team, cur, locked):
+    """Re-surface 1–2 earlier concept true/false checks — retrieval practice that
+    moves prior concepts into durable memory. Low-stakes (doesn't gate the round)."""
+    concepts = logic.spaced_review_concepts(cur, 2)
+    if not concepts:
+        return
+    st.divider()
+    st.markdown("### 🔁 Spaced review — from earlier rounds")
+    st.caption("A quick memory check on concepts you've already covered. Recycling them keeps "
+               "them fresh — this is low-stakes and doesn't affect this round's completion.")
+    for c in concepts:
+        quiz = content.CONCEPT_QUIZ.get(c, [])
+        if not quiz:
+            continue
+        stmt, truth = quiz[0]
+        stt = logic.concept_answer_status(team["id"], cur, c)
+        prev = (stt["quiz"] or [None])[0]
+        key = f"sr_{cur}_{c}"
+        with st.container(border=True):
+            st.markdown(f"**{c}**")
+            defn, _ = content.concept_help(c)
+            st.caption(f"📖 {defn}")
+            if locked:
+                st.write("Committed — review disabled.")
+                continue
+            choice = st.radio(f"True or false? *{stmt}*", ["True", "False"],
+                              index=(None if prev is None else (0 if prev else 1)),
+                              key=key, horizontal=True,
+                              on_change=_autosave_review, args=(team["id"], cur, c, key))
+            if choice is not None:
+                if (choice == "True") == bool(truth):
+                    st.success("✅ Correct — still got it.")
+                else:
+                    st.error("❌ Not quite — worth a quick re-read of this concept.")
+
 
 def _autosave_concept(team_id, rnd, concept, tkey, qkeys):
     """Autosave a concept answer (text + true/false picks) as the student edits."""
@@ -1243,6 +1321,124 @@ def progress(team):
 
 
 # --------------------------------------------------------------------------- #
+# Cohort leaderboard (anonymized) + Demo Day
+# --------------------------------------------------------------------------- #
+def leaderboard(team):
+    st.subheader("🏆 Cohort Leaderboard")
+    st.caption("Where your venture stands against the rest of the cohort. Anonymized — you see "
+               "everyone's standing but only your own name. Climb by earning evidence.")
+    metric = st.radio("Rank by", list(logic.LEADERBOARD_METRICS.keys()),
+                      format_func=lambda k: logic.LEADERBOARD_METRICS[k], horizontal=True,
+                      key="lb_metric")
+    rows = logic.leaderboard(team.get("game_id"), metric)
+    mine = next((r for r in rows if r["team"]["id"] == team["id"]), None)
+    if mine:
+        c1, c2 = st.columns(2)
+        c1.metric("Your rank", f"#{mine['rank']} of {len(rows)}")
+        _v = {"round_score": f"{mine['round_score']:.0f}/100",
+              "valuation": f"${mine['valuation']:,.0f}",
+              "coverage": f"{mine['coverage']*100:.0f}%"}[metric]
+        c2.metric(logic.LEADERBOARD_METRICS[metric], _v)
+    st.divider()
+    medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+    for r in rows:
+        is_me = r["team"]["id"] == team["id"]
+        ident = logic.team_identity(r["team"])
+        name = (f"{ident['mascot']} **You** ({ident['display']})" if is_me
+                else f"{ident['mascot']} Team {r['rank']}")
+        val = {"round_score": f"{r['round_score']:.0f}/100",
+               "valuation": f"${r['valuation']:,.0f}",
+               "coverage": f"{r['coverage']*100:.0f}%"}[metric]
+        badge = medals.get(r["rank"], f"#{r['rank']}")
+        line = f"{badge}  {name} — **{val}**  ·  🏅 {r['badges']}"
+        if is_me:
+            st.success(line)
+        else:
+            st.markdown(line)
+
+
+def demo_day(team):
+    st.subheader("🎤 Demo Day — Evidence Exchange")
+    _why("Progress")
+    gid = team.get("game_id")
+    is_open = logic.demo_is_open(gid)
+    if not is_open:
+        st.info("🔒 The Evidence Exchange opens near the end of the semester — your instructor "
+                "starts it. Until then, keep building evidence, and you can draft your pitch below.")
+    else:
+        st.success("🎉 The Evidence Exchange is OPEN — polish your pitch, then read and vote on "
+                   "your peers' ventures.")
+
+    # ---- Your pitch ----------------------------------------------------------
+    st.write("### Your 60-second pitch")
+    p = db.get_pitch(team["id"]) or {}
+    se = logic.strongest_evidence(team["id"])
+    default_ev = p.get("best_evidence") or (
+        f"{se['description']} ({se['evidence_type']}, strength {se['strength']}/10)" if se else "")
+    with st.form("pitch_form"):
+        headline = st.text_input("One-line headline", value=p.get("headline", ""),
+                                 placeholder="Same-day healthy dinners for exhausted parents.")
+        pitch = st.text_area("The pitch — what, for whom, and why it works",
+                             value=p.get("pitch", ""))
+        best = st.text_area("Your single strongest piece of evidence", value=default_ev,
+                            help="Auto-filled from your Evidence Ledger's strongest item — edit freely.")
+        ask = st.text_input("Your ask (what you want next)", value=p.get("ask", ""),
+                            placeholder="A pilot with 10 families / a follow-on investment.")
+        if st.form_submit_button("💾 Save pitch", type="primary"):
+            db.save_pitch(team["id"], gid, headline, pitch, best, ask)
+            st.success("Pitch saved.")
+            st.rerun()
+
+    if not is_open:
+        return
+
+    # ---- Vote on peers -------------------------------------------------------
+    st.divider()
+    st.write("### Read & vote on the strongest ventures")
+    my_votes = db.votes_by_voter(gid, team["id"])
+    st.caption(f"Vote for up to **{logic.DEMO_VOTES_PER_TEAM}** OTHER teams with the best "
+               f"evidence-backed case — you can't vote for yourself. Used {len(my_votes)}/"
+               f"{logic.DEMO_VOTES_PER_TEAM}.")
+    peers = [pp for pp in db.list_pitches(gid) if pp["team_id"] != team["id"]]
+    if not peers:
+        st.info("No other pitches submitted yet — check back once teams have saved theirs.")
+    for pp in peers:
+        other = db.get_team(pp["team_id"])
+        ident = logic.team_identity(other)
+        with st.container(border=True):
+            st.markdown(f"**{ident['mascot']} {pp.get('headline') or 'Untitled venture'}**")
+            if pp.get("pitch"):
+                st.write(pp["pitch"])
+            if pp.get("best_evidence"):
+                st.caption(f"💪 Strongest evidence: {pp['best_evidence']}")
+            if pp.get("ask"):
+                st.caption(f"🙋 Ask: {pp['ask']}")
+            voted = pp["team_id"] in my_votes
+            if voted:
+                if st.button("★ Voted — click to undo", key=f"vote_{pp['team_id']}"):
+                    db.remove_vote(gid, team["id"], pp["team_id"])
+                    st.rerun()
+            else:
+                disabled = len(my_votes) >= logic.DEMO_VOTES_PER_TEAM
+                if st.button("☆ Vote for this venture", key=f"vote_{pp['team_id']}",
+                             disabled=disabled,
+                             help="Out of votes — undo one first." if disabled else None):
+                    db.cast_vote(gid, team["id"], pp["team_id"])
+                    st.rerun()
+
+    # ---- Live results --------------------------------------------------------
+    st.divider()
+    st.write("### 🏆 Live results")
+    medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+    for r in logic.demo_results(gid):
+        ident = logic.team_identity(r["team"])
+        me = r["team"]["id"] == team["id"]
+        label = f"{ident['mascot']} **You** ({ident['display']})" if me else \
+            f"{ident['mascot']} {ident['display']}"
+        st.markdown(f"{medals.get(r['rank'], '#'+str(r['rank']))} {label} — **{r['votes']}** vote(s)")
+
+
+# --------------------------------------------------------------------------- #
 # Founder & Opportunity
 # --------------------------------------------------------------------------- #
 def founder_opportunity(team):
@@ -1593,6 +1789,8 @@ def canvases(team):
              "Environment Canvas is the guided order; each belongs to its own round.",
     )
     title, blocks = _CANVAS_DEFS[ctype]
+    if ctype == "customer_profile":
+        _exemplar_customer_profile()
 
     # Per-canvas editability: under strict mode a canvas is editable only in its round.
     canvas_ok = logic.canvas_editable(ctype, cur, team["id"]) and editable
@@ -1955,6 +2153,7 @@ def experiments(team):
 def evidence(team):
     st.subheader("📒 Evidence Ledger")
     _why("Evidence Ledger")
+    _exemplar_evidence()
     editable = _round_gate("Evidence Ledger", team)
     _ai_check_notice(team, tool_area="Other")
     _guide(
@@ -2267,6 +2466,7 @@ def market_events(team):
 def pivots(team):
     st.subheader("🔀 Pivot Petition")
     _why("Pivot Petition")
+    _exemplar_pivot()
     editable = _round_gate("Pivot Petition", team)
     _ai_check_notice(team, tool_area="Pivot reasoning")
     _guide(

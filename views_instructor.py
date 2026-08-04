@@ -628,6 +628,104 @@ def games_console():
 
 
 # --------------------------------------------------------------------------- #
+# Misconception radar — where the cohort is struggling
+# --------------------------------------------------------------------------- #
+def misconception_radar():
+    st.subheader("🔎 Misconception Radar")
+    _guide(
+        "Where THIS game's cohort is struggling, so you can reteach the exact shared gap. It "
+        "uses the true/false understanding checks teams submit on the Concept Check page, plus "
+        "how many important assumptions the cohort has left untested.",
+        terms=[
+            ("Wrong rate", "Share of teams that answered a concept's true/false incorrectly."),
+            ("Untested", "Important assumptions still marked Untested/Ignored across all teams."),
+        ],
+    )
+    rep = logic.misconception_report()
+    st.caption(f"Across **{rep['teams']}** team(s) in the active game.")
+    if rep["concepts"]:
+        worst = [c for c in rep["concepts"] if c["wrong"] > 0][:3]
+        if worst:
+            st.warning("🎯 **Reteach first:** " + " · ".join(
+                f"{c['concept']} ({c['wrong']}/{c['answered']} wrong, {c['wrong_rate']*100:.0f}%)"
+                for c in worst))
+        st.dataframe(
+            [{"Concept": c["concept"], "Answered": c["answered"], "Wrong": c["wrong"],
+              "Wrong rate": f"{c['wrong_rate']*100:.0f}%"} for c in rep["concepts"]],
+            use_container_width=True, hide_index=True)
+    else:
+        st.info("No true/false answers recorded yet — they appear as teams do Concept Checks.")
+    st.divider()
+    st.write("### Assumption testing")
+    t = rep["total_important"]
+    u = rep["untested_important"]
+    m1, m2 = st.columns(2)
+    m1.metric("Important assumptions untested", f"{u}/{t}",
+              help="Important assumptions the cohort has left Untested or Ignored.")
+    m2.metric("Cohort test coverage", f"{(1 - u/t)*100:.0f}%" if t else "—")
+    if t and u / t > 0.5:
+        st.warning("More than half of the cohort's important assumptions are untested — a shared "
+                   "blind spot worth a class nudge toward the Experiment Marketplace.")
+
+
+# --------------------------------------------------------------------------- #
+# Demo Day (Evidence Exchange) — Director control + results
+# --------------------------------------------------------------------------- #
+def demo_day_admin():
+    st.subheader("🎤 Demo Day — Evidence Exchange")
+    _guide(
+        "Your capstone. Open the Evidence Exchange for this game and teams can submit a short "
+        "pitch with their strongest evidence, then vote on each other's ventures. Peer votes "
+        "and social comparison make the finale an authentic, motivating close to the semester.",
+        steps=[
+            "When the cohort is ready to present, click Open Demo Day.",
+            "Teams submit pitches and vote on the student Demo Day page.",
+            "Watch the live results here; close it when voting is done.",
+        ],
+    )
+    gid = db.active_game_id()
+    open_now = logic.demo_is_open(gid)
+    c1, c2 = st.columns([1, 2])
+    if open_now:
+        if c1.button("⏹️ Close Demo Day"):
+            logic.set_demo_open(gid, False)
+            st.rerun()
+    else:
+        if c1.button("▶️ Open Demo Day", type="primary"):
+            logic.set_demo_open(gid, True)
+            st.rerun()
+    c2.metric("Status", "🟢 OPEN" if open_now else "⚪ Closed")
+
+    st.divider()
+    st.write("### Submitted pitches")
+    pitches = db.list_pitches(gid)
+    if not pitches:
+        st.info("No pitches yet.")
+    for p in pitches:
+        t = db.get_team(p["team_id"])
+        if not t:
+            continue
+        ident = logic.team_identity(t)
+        with st.expander(f"{ident['mascot']} {ident['display']} — {p.get('headline') or 'Untitled'}"):
+            st.write(p.get("pitch") or "_(no pitch text)_")
+            if p.get("best_evidence"):
+                st.caption(f"💪 Strongest evidence: {p['best_evidence']}")
+            if p.get("ask"):
+                st.caption(f"🙋 Ask: {p['ask']}")
+
+    st.divider()
+    st.write("### 🏆 Results")
+    medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+    results = logic.demo_results(gid)
+    if not any(r["votes"] for r in results):
+        st.caption("No votes cast yet.")
+    for r in results:
+        ident = logic.team_identity(r["team"])
+        st.markdown(f"{medals.get(r['rank'], '#'+str(r['rank']))} {ident['mascot']} "
+                    f"**{ident['display']}** — {r['votes']} vote(s)")
+
+
+# --------------------------------------------------------------------------- #
 # Team setup
 # --------------------------------------------------------------------------- #
 def team_setup():

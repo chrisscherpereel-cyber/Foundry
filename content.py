@@ -1503,6 +1503,58 @@ def why_matters(tool):
     return WHY_MATTERS.get(tool)
 
 
+# --------------------------------------------------------------------------- #
+# Worked examples — contrasting strong vs. weak cases set the quality bar.
+# --------------------------------------------------------------------------- #
+EXEMPLAR_CUSTOMER_PROFILE = {
+    "weak": {
+        "Jobs": "People want to eat healthy.",
+        "Pains": "It's hard.",
+        "Gains": "They'd be happy.",
+    },
+    "strong": {
+        "Jobs": "Busy parents of young kids get a healthy dinner on the table on weeknights "
+                "in under 20 minutes, without a second grocery trip.",
+        "Pains": "By 6pm they're exhausted and decision-fatigued; takeout is expensive and "
+                 "guilt-inducing; recipes assume time and ingredients they don't have.",
+        "Gains": "Feel like a 'good parent', zero planning, minimal cleanup, and food the "
+                 "kids will actually eat.",
+    },
+    "note": "The strong profile names a **specific** customer, a **concrete** job with a time/"
+            "money constraint, and pains/gains you could verify by watching or asking — not "
+            "vague wishes. Aim for detail you could take to five real people.",
+}
+
+EXEMPLAR_EVIDENCE = {
+    "weak": "“A few friends said the idea sounds cool.” — opinion, strength ~1. Anyone can get "
+            "this, and it predicts nothing.",
+    "strong": "“3 of 5 coffee-shop owners signed a one-page Letter of Intent to pilot at "
+              "$49/mo, and 2 shared last month's sales data.” — a written, behavioral "
+              "commitment, strength ~9.",
+    "loi": "**What a signed LOI looks like:** one page, names the customer and the offer, "
+           "states intent to buy/pilot at a specific price, a start date, and a signature. "
+           "It isn't a contract — it's a costly signal that beats any verbal 'yes'.",
+    "note": "Behavior (signed, paid, pre-ordered, used) outranks opinion every time. When you "
+            "log evidence, ask: *what did the customer actually DO?*",
+}
+
+EXEMPLAR_PIVOT = {
+    "original": "Busy parents will pay for weekly meal-kit boxes.",
+    "evidence": "4 of 5 interviewed parents said they'd rather buy ready-made single meals the "
+                "same day than plan a weekly box; 2 cancelled a trial box in week 1.",
+    "change": "Shift the offer from weekly kits to grab-and-go single meals sold same-day "
+              "through a local channel.",
+    "new_assumptions": "Parents will pay a premium for same-day convenience; a local pickup "
+                       "channel can hit the 6pm window.",
+    "annotations": [
+        "✅ Driven by **evidence**, not frustration — the interviews and cancellations pointed the way.",
+        "✅ Names the **specific block** that changes (the offer/value proposition).",
+        "✅ States the **new assumptions** the change creates, ready to test next.",
+        "❌ A weak pivot would just say 'let's try meals instead' with no evidence and no new test.",
+    ],
+}
+
+
 def narrative_phase(rnd, total_rounds):
     """(index, name, emoji, theme) for the current round's story phase."""
     total = max(1, int(total_rounds))
