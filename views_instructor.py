@@ -28,6 +28,62 @@ def _guide(what, steps=None, terms=None, expanded=False):
             st.markdown("\n".join(f"- **{t}** — {d}" for t, d in terms))
 
 
+def _ai_feedback_settings():
+    """Optional bring-your-own-key AI comment. Deterministic feedback is always on;
+    this only ADDS a richer comment when a key is supplied, and costs nothing otherwise."""
+    cfg = logic.get_ai_config()
+    title = "🤖 Optional AI feedback (bring your own key)"
+    title += " · ON" if logic.ai_available() else " · off"
+    with st.expander(title):
+        st.caption("The simulation's feedback is always generated for free without any AI. This "
+                   "adds an optional **richer AI comment** to feedback emails using a **free-tier "
+                   "key you supply** (Groq or Google Gemini both have no-cost tiers). Leave it "
+                   "off and everything still works — nothing depends on it.")
+        provs = list(logic.AI_PROVIDERS.keys())
+        prov = st.selectbox("Provider", provs,
+                            index=provs.index(cfg["provider"]),
+                            format_func=lambda k: logic.AI_PROVIDERS[k]["label"])
+        pinfo = logic.AI_PROVIDERS[prov]
+        st.caption(f"Get a free key: {pinfo['keys_url']}")
+        key = st.text_input("API key", value=cfg["key"], type="password",
+                            help="Stored with the game settings. Use a free-tier key; treat it "
+                                 "like a password.")
+        c1, c2 = st.columns(2)
+        model = c1.text_input("Model", value=cfg["model"],
+                              help=f"Default for this provider: {pinfo['model']}")
+        base = c2.text_input("Base URL (OpenAI-compatible only)", value=cfg["base"])
+        enabled = st.checkbox("Enable AI comments", value=cfg["enabled"])
+        st.caption("⚠️ When enabled, the team's summary metrics are sent to the provider to "
+                   "generate the comment. Don't include student names; free tiers have rate limits.")
+        b1, b2 = st.columns(2)
+        if b1.button("Save AI settings"):
+            logic.set_ai_config(provider=prov, enabled=enabled, key=key, model=model, base=base)
+            st.success("Saved.")
+            st.rerun()
+        if b2.button("Test key"):
+            logic.set_ai_config(provider=prov, enabled=True, key=key, model=model, base=base)
+            ok, msg = logic.ai_test_key()
+            (st.success if ok else st.error)(msg)
+
+
+def _ai_comment_button(team_id, key, round_no=None):
+    """Show an 'add AI comment' button (only when configured); returns the comment text
+    to append, or None. Caches per team/round in session so it isn't re-fetched."""
+    if not logic.ai_available():
+        return None
+    cache = st.session_state.setdefault("_ai_comments", {})
+    ck = (team_id, round_no or db.current_round())
+    if st.button("✨ Add AI comment", key=f"aicmt_{key}",
+                 help="Generate a richer comment with your configured AI key."):
+        with st.spinner("Asking the AI…"):
+            txt = logic.ai_round_comment(team_id, round_no)
+        if txt:
+            cache[ck] = txt
+        else:
+            st.warning("No AI comment (check your key in Round Control → AI feedback).")
+    return cache.get(ck)
+
+
 # --------------------------------------------------------------------------- #
 # Auto-Director — automate scoring / events / pivots from team input, with override
 # --------------------------------------------------------------------------- #
@@ -173,12 +229,17 @@ def auto_director():
                     st.success(f"Event issued to {t['name']}.")
                     st.rerun()
 
-            # Feedback email — preview & send
+            # Feedback email — preview & send (deterministic; optional AI comment)
             st.markdown("**Feedback email (venture review)**")
             fb = logic.generate_feedback(t["id"], rnd, sc)
             with st.popover("Preview / edit"):
                 subj = st.text_input("Subject", value=fb["subject"], key=f"fb_subj_{t['id']}")
-                body = st.text_area("Body", value=fb["body"], height=260, key=f"fb_body_{t['id']}")
+                ai_txt = _ai_comment_button(t["id"], f"auto_{t['id']}", rnd)
+                default_body = fb["body"]
+                if ai_txt:
+                    default_body += f"\n\n✨ Coach's note:\n{ai_txt}"
+                body = st.text_area("Body", value=default_body, height=280,
+                                    key=f"fb_body_{t['id']}_{'ai' if ai_txt else 'plain'}")
                 if st.button("Send to team Inbox", key=f"fb_send_{t['id']}"):
                     db.add_message(t["id"], subj, body, rnd)
                     st.success("Sent.")
@@ -491,6 +552,8 @@ def round_control():
         if st.button("Save round mode"):
             logic.set_auto_flag("strict_round_mode", strict)
             st.success("Round mode saved.")
+
+    _ai_feedback_settings()
 
     # ---- Economy & balance --------------------------------------------------
     with st.expander("💲 Economy & balance — tune the numbers"):
@@ -1357,7 +1420,12 @@ def round_scores():
     email = _round_score_email(team, rnd, rs)
     with st.popover("Preview / edit score email"):
         subj = st.text_input("Subject", value=email["subject"], key=f"rs_subj_{team['id']}")
-        body = st.text_area("Body", value=email["body"], height=280, key=f"rs_body_{team['id']}")
+        ai_txt = _ai_comment_button(team["id"], f"rs_{team['id']}", rnd)
+        default_body = email["body"]
+        if ai_txt:
+            default_body += f"\n\n✨ Coach's note:\n{ai_txt}"
+        body = st.text_area("Body", value=default_body, height=280,
+                            key=f"rs_body_{team['id']}_{'ai' if ai_txt else 'plain'}")
         if st.button("Send to team Inbox", key=f"rs_send_{team['id']}"):
             db.add_message(team["id"], subj, body, rnd)
             st.success("Sent.")

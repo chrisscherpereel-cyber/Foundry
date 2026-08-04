@@ -1715,6 +1715,128 @@ def misconception_report(game_id=None):
             "total_important": total_imp, "untested_important": untested}
 
 
+# --------------------------------------------------------------------------- #
+# Optional AI comment (bring-your-own-key) — deterministic feedback is always on;
+# this ADDS a richer LLM comment only when an instructor supplies a key. It uses
+# the standard library (no extra dependency) and degrades to None on any problem.
+# --------------------------------------------------------------------------- #
+AI_PROVIDERS = {
+    "groq": {"label": "Groq — Llama 3.1 (fast, free tier)", "kind": "openai",
+             "base": "https://api.groq.com/openai/v1", "model": "llama-3.1-8b-instant",
+             "keys_url": "https://console.groq.com/keys"},
+    "gemini": {"label": "Google Gemini (free tier)", "kind": "gemini",
+               "base": "https://generativelanguage.googleapis.com/v1beta",
+               "model": "gemini-1.5-flash", "keys_url": "https://aistudio.google.com/apikey"},
+    "openai": {"label": "OpenAI-compatible (custom base URL)", "kind": "openai",
+               "base": "https://api.openai.com/v1", "model": "gpt-4o-mini",
+               "keys_url": "https://platform.openai.com/api-keys"},
+}
+
+
+def get_ai_config():
+    prov = db.get_setting("ai_provider", "groq")
+    if prov not in AI_PROVIDERS:
+        prov = "groq"
+    p = AI_PROVIDERS[prov]
+    return {
+        "provider": prov,
+        "enabled": db.get_setting("ai_enabled", "0") == "1",
+        "key": db.get_setting("ai_key", "") or "",
+        "model": db.get_setting("ai_model", "") or p["model"],
+        "base": db.get_setting("ai_base", "") or p["base"],
+        "kind": p["kind"],
+    }
+
+
+def set_ai_config(provider=None, enabled=None, key=None, model=None, base=None):
+    if provider is not None:
+        db.set_setting("ai_provider", provider)
+    if enabled is not None:
+        db.set_setting("ai_enabled", "1" if enabled else "0")
+    if key is not None:
+        db.set_setting("ai_key", key)
+    if model is not None:
+        db.set_setting("ai_model", model)
+    if base is not None:
+        db.set_setting("ai_base", base)
+
+
+def ai_available():
+    cfg = get_ai_config()
+    return bool(cfg["enabled"] and cfg["key"])
+
+
+def _http_json(url, payload, headers, timeout=25):
+    import urllib.request
+    import json as _json
+    data = _json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return _json.loads(resp.read().decode("utf-8"))
+
+
+def ai_comment(prompt, system=None, cfg=None, timeout=25):
+    """Return an LLM comment, or None if AI isn't configured or anything fails.
+
+    Deterministic feedback never depends on this — it's purely additive."""
+    cfg = cfg or get_ai_config()
+    if not (cfg["enabled"] and cfg["key"]):
+        return None
+    try:
+        if cfg["kind"] == "gemini":
+            url = (f"{cfg['base'].rstrip('/')}/models/{cfg['model']}:generateContent"
+                   f"?key={cfg['key']}")
+            sys_txt = (system + "\n\n") if system else ""
+            body = {"contents": [{"parts": [{"text": sys_txt + prompt}]}],
+                    "generationConfig": {"maxOutputTokens": 260, "temperature": 0.6}}
+            out = _http_json(url, body, {"Content-Type": "application/json"}, timeout)
+            return out["candidates"][0]["content"]["parts"][0]["text"].strip()
+        # OpenAI-compatible (Groq / OpenAI / others)
+        url = f"{cfg['base'].rstrip('/')}/chat/completions"
+        msgs = ([{"role": "system", "content": system}] if system else []) \
+            + [{"role": "user", "content": prompt}]
+        body = {"model": cfg["model"], "messages": msgs,
+                "max_tokens": 260, "temperature": 0.6}
+        headers = {"Content-Type": "application/json",
+                   "Authorization": f"Bearer {cfg['key']}"}
+        out = _http_json(url, body, headers, timeout)
+        return out["choices"][0]["message"]["content"].strip()
+    except Exception:
+        return None
+
+
+def ai_test_key(cfg=None):
+    """Quick round-trip to validate the key. Returns (ok, message)."""
+    r = ai_comment("Reply with the single word: OK", cfg=cfg, timeout=20)
+    if r is None:
+        return False, "No response — check the key, model, and provider."
+    return True, f"Working ✓ (model replied: “{r[:40]}”)"
+
+
+def ai_round_comment(team_id, round_no=None):
+    """A short, in-character coaching comment grounded in the team's real state.
+    Returns None if AI isn't configured."""
+    if not ai_available():
+        return None
+    team = db.get_team(team_id)
+    rnd = round_no or db.current_round()
+    es = evidence_summary(team_id)
+    risk = assumption_risk_report(team_id)
+    val = compute_valuation(team_id)
+    _pi, _pn, _pe, _pt = content.narrative_phase(rnd, total_rounds())
+    facts = (f"Round {rnd} ({_pn} phase). Evidence items: {es['count']} "
+             f"({es['behavioral']} behavioral, {es['opinion']} opinion, "
+             f"avg strength {es['avg_strength']}/10). "
+             f"Important untested assumptions: {len(risk['exposed'])}. "
+             f"Evidence coverage: {val['evidence_coverage']*100:.0f}%. "
+             f"Territory: {team['opportunity']}.")
+    system = (f"You are {content.INVESTOR['name']}, {content.INVESTOR['title']} — sharp, warm, "
+              "allergic to hype. Give a startup team 2–3 sentences of specific, honest coaching "
+              "for this round. Reward evidence and behavior over opinion; name the single most "
+              "useful next move. No lists, no preamble, under 70 words.")
+    return ai_comment(facts, system=system)
+
+
 def quick_setup_teams(n_teams, difficulty, opportunity_mode="distinct",
                       opportunity_choice=None, founder_mode="balanced",
                       name_prefix="Team", clear_existing=False):
