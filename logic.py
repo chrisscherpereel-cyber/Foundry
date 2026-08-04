@@ -1803,10 +1803,9 @@ def ai_comment(prompt, system=None, cfg=None, timeout=25, return_error=False):
             url = f"{cfg['base'].rstrip('/')}/models/{cfg['model']}:generateContent"
             sys_txt = (system + "\n\n") if system else ""
             body = {"contents": [{"parts": [{"text": sys_txt + prompt}]}],
-                    # Gemini 2.5 spends output on hidden "thinking" by default, which
-                    # truncates short replies — disable it and give ample room.
-                    "generationConfig": {"maxOutputTokens": 800, "temperature": 0.6,
-                                         "thinkingConfig": {"thinkingBudget": 0}}}
+                    # Gemini 2.5 spends part of the output budget on hidden "thinking",
+                    # so give ample room to avoid truncating the visible note.
+                    "generationConfig": {"maxOutputTokens": 2048, "temperature": 0.6}}
             headers = {"Content-Type": "application/json", "x-goog-api-key": cfg["key"]}
             out = _http_json(url, body, headers, timeout)
             cands = out.get("candidates") or []
