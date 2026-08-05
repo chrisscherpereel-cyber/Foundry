@@ -187,6 +187,33 @@ def newly_unlocked(rnd):
     return intro
 
 
+def round_map(highlight_new=True):
+    """A detailed, per-round map of the whole semester: what's covered, what NEW
+    tools/canvases open that round, and the concepts introduced. Used for the
+    student & director round maps so nothing new goes unnoticed."""
+    out = []
+    for row in get_schedule():
+        rnd = row["round"]
+        topics = row["topics"]
+        titles = [t["title"] for t in topics]
+        concepts, tasks, tools_focus = [], [], []
+        for t in topics:
+            concepts += [c for c in t.get("concepts", []) if c not in concepts]
+            if t.get("sim_task"):
+                tasks.append(t["sim_task"])
+            if t.get("tool"):
+                tools_focus.append(t["tool"])
+        new_tools = [p for p in newly_unlocked(rnd) if p not in content.BASE_TOOLS]
+        if rnd == 1:
+            new_tools = [p for p in newly_unlocked(rnd)]   # show the base toolkit too
+        out.append({
+            "round": rnd, "titles": titles, "concepts": concepts,
+            "new_tools": new_tools, "tasks": tasks, "tools_focus": tools_focus,
+            "advance_at": row.get("advance_at"),
+        })
+    return out
+
+
 def page_unlock_round(page):
     """Earliest round that introduces a page (1 for base tools / unscheduled)."""
     if page in content.BASE_TOOLS:
@@ -997,6 +1024,85 @@ def _parse_dt(text):
         return None
 
 
+def pre_advance_checklist(round_no=None):
+    """A director's 'before you advance' checklist for the round about to close, so
+    nothing is forgotten when advancing manually. Each item: label, ok (bool),
+    detail, and required (a hard vs. soft gate)."""
+    rnd = round_no or db.current_round()
+    teams = db.list_teams()
+    n = len(teams)
+    items = []
+
+    # 1) Commitments
+    committed = sum(1 for t in teams
+                    if (db.get_commitment(t["id"], rnd) or {}).get("committed"))
+    items.append({
+        "label": "Teams committed their round",
+        "ok": n > 0 and committed == n,
+        "detail": f"{committed}/{n} teams have committed Round {rnd}." if n else "No teams yet.",
+        "required": False,
+    })
+
+    # 2) Deadline
+    ds = deadline_status(rnd)
+    if ds["set"]:
+        items.append({"label": "Decision deadline passed",
+                      "ok": ds["passed"],
+                      "detail": (f"Due {ds['due_text']} — passed." if ds["passed"]
+                                 else f"Due {ds['due_text']} ({ds['remaining']})."),
+                      "required": False})
+    else:
+        items.append({"label": "Decision deadline set",
+                      "ok": False,
+                      "detail": "No advance time scheduled for this round (optional).",
+                      "required": False})
+
+    # 3) Pending pivot petitions
+    pend = 0
+    for t in teams:
+        pend += sum(1 for p in db.list_pivots(t["id"]) if p["status"] == "Submitted")
+    if rnd >= page_unlock_round("Pivot Petition"):
+        items.append({"label": "Pivot petitions decided",
+                      "ok": pend == 0,
+                      "detail": (f"{pend} petition(s) awaiting your decision."
+                                 if pend else "No pending petitions."),
+                      "required": False})
+
+    # 4) Market events issued (if events are in play and auto-events is off)
+    if rnd >= page_unlock_round("Market Events") and not auto_flag("auto_events_on"):
+        have = sum(1 for t in teams
+                   if any(e["round"] == rnd for e in db.list_events(t["id"],
+                                                                    include_broadcast=False)))
+        items.append({"label": "Market events issued",
+                      "ok": have == n and n > 0,
+                      "detail": f"{have}/{n} teams have a Round {rnd} event.",
+                      "required": False})
+
+    # 5) Round mail
+    gid = db.active_game_id()
+    f_sent = db.get_setting(_mail_sent_flag(gid, rnd, "foundry"), "0") == "1"
+    items.append({
+        "label": "Foundry feedback sent",
+        "ok": f_sent or mail_auto("foundry"),
+        "detail": ("Auto-send is on — it will post on advance." if mail_auto("foundry")
+                   else ("Sent." if f_sent else "Not sent — send manually or turn on auto.")),
+        "required": False,
+    })
+    if ai_available():
+        m_sent = db.get_setting(_mail_sent_flag(gid, rnd, "mp"), "0") == "1"
+        items.append({
+            "label": "Managing Partner note sent",
+            "ok": m_sent or mail_auto("mp"),
+            "detail": ("Auto-send is on — it will post on advance." if mail_auto("mp")
+                       else ("Sent." if m_sent else "Optional AI note not sent.")),
+            "required": False,
+        })
+
+    done = sum(1 for i in items if i["ok"])
+    return {"round": rnd, "items": items, "done": done, "total": len(items),
+            "all_ok": done == len(items)}
+
+
 def maybe_auto_advance():
     """Advance the current round if a scheduled advance time has passed.
 
@@ -1016,6 +1122,12 @@ def maybe_auto_advance():
                 target = row["round"]
     if target != cur:
         db.set_current_round(target)
+        # Deliver any auto-switched mail for each round that just closed.
+        for ended in range(cur, target):
+            try:
+                deliver_round_mail(ended)
+            except Exception:   # noqa: BLE001 — mail must never block an advance
+                pass
     return target
 
 
@@ -1498,6 +1610,143 @@ def team_identity(team):
     }
 
 
+def team_member_names(team):
+    """The roster member names for a team (from an imported class list), if any."""
+    import json as _json
+    raw = team.get("roster") if isinstance(team, dict) else None
+    if not raw:
+        return []
+    try:
+        roster = raw if isinstance(raw, list) else _json.loads(raw)
+    except Exception:   # noqa: BLE001
+        return []
+    names = []
+    for m in roster or []:
+        nm = (m.get("name") or "").strip() if isinstance(m, dict) else str(m).strip()
+        if nm:
+            names.append(nm)
+    return names
+
+
+# --------------------------------------------------------------------------- #
+# Venture name evaluation — a deterministic creativity / brand-fit score, with an
+# optional richer AI critique when a key is configured. Always-on and free.
+# --------------------------------------------------------------------------- #
+_GENERIC_NAME_WORDS = {"app", "solutions", "technologies", "tech", "systems", "global",
+                       "inc", "llc", "co", "company", "the", "group", "services",
+                       "platform", "digital", "online", "smart", "best", "pro", "plus",
+                       "hub", "world", "world", "ventures", "labs", "software"}
+
+
+def evaluate_venture_name(name, team_id=None, use_ai=True):
+    """Score a venture name on creativity, brand strength, and fit with the customer /
+    venture. Returns a dict of 0–5 subscores, an overall, notes, and optional AI text."""
+    raw = (name or "").strip()
+    words = [w for w in re.split(r"[\s\-_]+", raw) if w]
+    lower = raw.lower()
+    letters = re.sub(r"[^a-z]", "", lower)
+
+    # --- Creativity: distinctive, coined, memorable (not generic filler) -------
+    creativity = 2.0
+    if raw:
+        distinct = [w for w in words if w.lower() not in _GENERIC_NAME_WORDS]
+        generic = [w for w in words if w.lower() in _GENERIC_NAME_WORDS]
+        if len(words) == 1 and 4 <= len(letters) <= 12:
+            creativity += 1.2        # a single coined word tends to brand well
+        if any(w.lower() not in _ENGLISH_HINT for w in words) and letters:
+            creativity += 0.6        # looks invented / not a dictionary phrase
+        if _has_sound_play(lower):
+            creativity += 0.8        # alliteration / internal rhyme
+        creativity -= 0.9 * len(generic)
+        if not distinct:
+            creativity -= 1.0
+    creativity = max(0.0, min(5.0, creativity))
+
+    # --- Brand value: length, pronounceability, cleanliness --------------------
+    brand = 3.0
+    if raw:
+        if 3 <= len(letters) <= 14:
+            brand += 0.8
+        if len(words) <= 2:
+            brand += 0.6
+        if len(letters) > 18 or len(words) >= 4:
+            brand -= 1.2
+        if re.search(r"\d", raw):
+            brand -= 0.6              # numbers/hyphens hurt recall
+        if _vowel_ratio(letters) < 0.25 or _vowel_ratio(letters) > 0.7:
+            brand -= 0.6             # hard to pronounce
+        if lower in _GENERIC_NAME_WORDS:
+            brand -= 1.5
+    brand = max(0.0, min(5.0, brand))
+
+    # --- Fit: does the name echo the venture / territory / customer? -----------
+    fit = 2.5
+    notes = []
+    if team_id is not None and raw:
+        team = db.get_team(team_id)
+        context_terms = set()
+        for src in (team.get("opportunity") or "",):
+            context_terms |= {w.lower() for w in re.split(r"[^a-zA-Z]+", src) if len(w) > 3}
+        # venture description / candidate ventures add context
+        for v in db.get_ventures(team_id):
+            for w in re.split(r"[^a-zA-Z]+", (v.get("name") or "")):
+                if len(w) > 3:
+                    context_terms.add(w.lower())
+        hit = any(w.lower() in context_terms for w in words) if context_terms else False
+        if hit:
+            fit += 1.5
+            notes.append("Echoes your territory/venture — helps customers 'get it' fast.")
+        elif context_terms:
+            fit += 0.3
+            notes.append("Abstract vs. your territory — fine if you'll build the meaning, but it "
+                         "won't explain itself.")
+    fit = max(0.0, min(5.0, fit))
+
+    if not raw:
+        return {"name": raw, "creativity": 0, "brand": 0, "fit": 0, "overall": 0,
+                "notes": ["Enter a name to score it."], "ai": None}
+
+    overall = round((creativity + brand + fit) / 3, 1)
+    if creativity >= 3.5:
+        notes.append("Distinctive and memorable.")
+    if brand < 2.5:
+        notes.append("Consider something shorter and easier to say aloud.")
+    if len(words) >= 4:
+        notes.append("Long names are hard to recall — try to get it to one or two words.")
+
+    ai_text = None
+    if use_ai and ai_available():
+        sys = ("You are a brand strategist. In 2–3 sentences, critique this startup name for "
+               "memorability, brand strength, and how well it fits the customer/venture. Be "
+               "specific and honest; suggest one improvement. No lists, under 60 words.")
+        ctx = f"Venture name: “{raw}”."
+        if team_id is not None:
+            t = db.get_team(team_id)
+            ctx += f" Opportunity territory: {t.get('opportunity','')}."
+        ai_text = ai_comment(ctx, system=sys)
+
+    return {"name": raw, "creativity": round(creativity, 1), "brand": round(brand, 1),
+            "fit": round(fit, 1), "overall": overall, "notes": notes, "ai": ai_text}
+
+
+# tiny helpers for the name scorer (kept local & dependency-free)
+_ENGLISH_HINT = {"food", "waste", "care", "home", "meal", "green", "health", "learn",
+                 "study", "market", "shop", "ride", "pet", "farm", "clean", "water"}
+
+
+def _has_sound_play(s):
+    toks = [t for t in re.split(r"[\s\-_]+", s) if t]
+    if len(toks) >= 2 and len({t[0] for t in toks}) == 1:
+        return True                      # alliteration
+    return bool(re.search(r"(.)\1", s))  # doubled letter / playful
+
+
+def _vowel_ratio(letters):
+    if not letters:
+        return 0.5
+    return sum(c in "aeiou" for c in letters) / len(letters)
+
+
 def commit_streak(team_id):
     """Consecutive most-recent rounds the team committed (an on-time streak)."""
     cur = db.current_round()
@@ -1650,15 +1899,66 @@ def strongest_evidence(team_id):
     return max(ev, key=lambda e: e["strength"]) if ev else None
 
 
-def demo_results(game_id=None):
-    """Peer-vote tally joined to teams, ranked."""
+def demo_config(game_id=None):
+    """Director-configured Demo Day investing rules: how much each team invests and
+    the minimum number of pitches they must spread it across."""
     gid = game_id if game_id is not None else db.active_game_id()
-    tally = db.vote_tally(gid)
-    rows = [{"team": t, "votes": tally.get(t["id"], 0)} for t in db.list_teams(gid)]
-    rows.sort(key=lambda r: r["votes"], reverse=True)
+    n_teams = len(db.list_teams(gid))
+    fund = int(db.get_setting(f"demo_fund:{gid}", "1000") or 1000)
+    # Default minimum spread = half of the OTHER teams (rounded up), at least 1.
+    default_min = max(1, (n_teams - 1 + 1) // 2)
+    min_teams = int(db.get_setting(f"demo_min_teams:{gid}", str(default_min)) or default_min)
+    min_teams = max(1, min(min_teams, max(1, n_teams - 1)))
+    return {"fund": fund, "min_teams": min_teams, "teams": n_teams}
+
+
+def set_demo_config(game_id, fund=None, min_teams=None):
+    gid = game_id if game_id is not None else db.active_game_id()
+    if fund is not None:
+        db.set_setting(f"demo_fund:{gid}", str(int(fund)))
+    if min_teams is not None:
+        db.set_setting(f"demo_min_teams:{gid}", str(int(min_teams)))
+
+
+def demo_investment_state(game_id, voter_team_id):
+    """A voter's current allocation vs. the rules — used to validate before locking."""
+    gid = game_id if game_id is not None else db.active_game_id()
+    cfg = demo_config(gid)
+    inv = db.investments_by_voter(gid, voter_team_id)
+    spent = sum(v for v in inv.values() if v > 0)
+    backed = sum(1 for v in inv.values() if v > 0)
+    remaining = cfg["fund"] - spent
+    ok = (spent <= cfg["fund"]) and (backed >= cfg["min_teams"]) and spent > 0
+    return {"fund": cfg["fund"], "min_teams": cfg["min_teams"], "spent": spent,
+            "remaining": remaining, "backed": backed, "invested": inv, "ok": ok,
+            "over_budget": spent > cfg["fund"]}
+
+
+def demo_results(game_id=None):
+    """Investment tally (dollars raised) joined to teams, ranked. Falls back to raw
+    vote counts if no dollar investments have been recorded yet."""
+    gid = game_id if game_id is not None else db.active_game_id()
+    dollars = db.investment_tally(gid)
+    counts = db.vote_tally(gid)
+    total = sum(dollars.values())
+    rows = []
+    for t in db.list_teams(gid):
+        d = dollars.get(t["id"], 0)
+        rows.append({"team": t, "raised": d, "votes": counts.get(t["id"], 0),
+                     "backers": 0})
+    # backers = number of distinct teams investing in each
+    for t in rows:
+        inv_rows = 0
+        for other in db.list_teams(gid):
+            if other["id"] == t["team"]["id"]:
+                continue
+            if db.investments_by_voter(gid, other["id"]).get(t["team"]["id"], 0) > 0:
+                inv_rows += 1
+        t["backers"] = inv_rows
+    rows.sort(key=lambda r: (r["raised"], r["votes"]), reverse=True)
     for i, r in enumerate(rows):
         r["rank"] = i + 1
-    return rows
+    return {"rows": rows, "total_raised": total}
 
 
 # ---- Spaced retrieval ------------------------------------------------------ #
@@ -1726,7 +2026,9 @@ AI_PROVIDERS = {
              "keys_url": "https://console.groq.com/keys"},
     "gemini": {"label": "Google Gemini (free tier)", "kind": "gemini",
                "base": "https://generativelanguage.googleapis.com/v1beta",
-               "model": "gemini-2.5-flash", "keys_url": "https://aistudio.google.com/apikey"},
+               # "-latest" alias tracks Google's current Flash model automatically, so
+               # the default never goes stale when a version is retired.
+               "model": "gemini-flash-latest", "keys_url": "https://aistudio.google.com/apikey"},
     "openai": {"label": "OpenAI-compatible (custom base URL)", "kind": "openai",
                "base": "https://api.openai.com/v1", "model": "gpt-4o-mini",
                "keys_url": "https://platform.openai.com/api-keys"},
@@ -2867,8 +3169,90 @@ def generate_welcome(team_id):
 
 def send_welcome(team_id):
     w = generate_welcome(team_id)
-    db.add_message(team_id, w["subject"], w["body"], 1)
+    db.add_message(team_id, w["subject"], w["body"], 1, sender="Venture Foundry")
     return w
+
+
+# --------------------------------------------------------------------------- #
+# Round mail — two tracks the director controls independently:
+#   • "foundry" : the deterministic venture-review note (always available)
+#   • "mp"      : an optional personal note from the AI Managing Partner (Vera
+#                 Sloan) — only when an AI key is configured.
+# Each track has its own auto/manual switch. Auto-send fires once per round when
+# the cohort advances; manual send is a button per team.
+# --------------------------------------------------------------------------- #
+MAIL_TRACKS = ("foundry", "mp")
+_MAIL_FLAG = {"foundry": "mail_foundry_auto", "mp": "mail_mp_auto"}
+
+
+def mail_auto(track):
+    """Whether this mail track auto-sends when the round advances."""
+    key = _MAIL_FLAG[track]
+    # Back-compat: the retired single 'auto_feedback_on' flag maps to Foundry mail.
+    if track == "foundry" and db.get_setting(key) is None:
+        return auto_flag("auto_feedback_on", default=False)
+    return auto_flag(key, default=False)
+
+
+def set_mail_auto(track, on):
+    db.set_setting(_MAIL_FLAG[track], "1" if on else "0")
+
+
+def _mail_sent_flag(gid, round_no, track):
+    return f"mail_sent:{gid}:{round_no}:{track}"
+
+
+def send_foundry_feedback(team_id, round_no=None, scores=None):
+    """Deterministic venture-review note, from Venture Foundry."""
+    fb = generate_feedback(team_id, round_no, scores)
+    db.add_message(team_id, fb["subject"], fb["body"], round_no or db.current_round(),
+                   sender="Venture Foundry")
+    return fb
+
+
+def generate_managing_partner_note(team_id, round_no=None):
+    """The AI Managing Partner's short personal note. None if AI isn't configured
+    or the model returns nothing."""
+    if not ai_available():
+        return None
+    txt = ai_round_comment(team_id, round_no)
+    if not txt:
+        return None
+    rnd = round_no or db.current_round()
+    body = f"{txt}\n\n{content.INVESTOR['sign']}"
+    return {"subject": f"A note from the Managing Partner — Round {rnd}", "body": body}
+
+
+def send_managing_partner_note(team_id, round_no=None):
+    note = generate_managing_partner_note(team_id, round_no)
+    if not note:
+        return None
+    db.add_message(team_id, note["subject"], note["body"], round_no or db.current_round(),
+                   sender=f"{content.INVESTOR['name']} · {content.INVESTOR['title']}")
+    return note
+
+
+def deliver_round_mail(round_no, teams=None, force=False):
+    """Auto-post whichever tracks are switched on, for the round that just ended.
+    Idempotent per (game, round, track) so re-runs don't double-send."""
+    teams = teams if teams is not None else db.list_teams()
+    gid = db.active_game_id()
+    summary = {"foundry": 0, "mp": 0}
+    if mail_auto("foundry"):
+        flag = _mail_sent_flag(gid, round_no, "foundry")
+        if force or db.get_setting(flag, "0") != "1":
+            for t in teams:
+                send_foundry_feedback(t["id"], round_no)
+                summary["foundry"] += 1
+            db.set_setting(flag, "1")
+    if mail_auto("mp") and ai_available():
+        flag = _mail_sent_flag(gid, round_no, "mp")
+        if force or db.get_setting(flag, "0") != "1":
+            for t in teams:
+                if send_managing_partner_note(t["id"], round_no):
+                    summary["mp"] += 1
+            db.set_setting(flag, "1")
+    return summary
 
 
 # ---- Automation settings & batch run -------------------------------------- #
@@ -2918,8 +3302,7 @@ def run_autopilot(round_no=None, teams=None):
                                             description="Pivot change cost (auto)",
                                             allow_negative=True)
                     entry["pivots"] += 1
-        if auto_flag("auto_feedback_on"):
-            send_feedback(t["id"], rnd)
-            entry["feedback"] = True
         summary.append(entry)
+    # Round mail is delivered separately by deliver_round_mail() on advance, so the
+    # Foundry/Managing-Partner switches are the single source of truth for mail.
     return summary

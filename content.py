@@ -33,6 +33,10 @@ FOUNDER_CARDS = [
         "hours": 120,
         "risk": "Moderate",
         "ethics": "Will not use manipulative dark-pattern pricing",
+        "backstory": "Two studio-mates who met in a design program and built a following "
+                     "running a campus arts account. They can make anything look and feel "
+                     "irresistible — but neither has ever shipped code or closed a B2B sale, "
+                     "so they'll have to partner or hire when the build gets technical.",
     },
     {
         "name": "Technical Founders",
@@ -42,6 +46,10 @@ FOUNDER_CARDS = [
         "hours": 100,
         "risk": "High",
         "ethics": "Strict about user data privacy",
+        "backstory": "Ex-hackathon partners who can prototype almost anything in a weekend. "
+                     "They're comfortable with risk and love a hard technical problem, but "
+                     "they tend to build before they've talked to a customer — their growth "
+                     "edge is discovery and selling, not shipping.",
     },
     {
         "name": "Operations Founders",
@@ -51,6 +59,10 @@ FOUNDER_CARDS = [
         "hours": 140,
         "risk": "Low",
         "ethics": "Prioritizes fair supplier terms",
+        "backstory": "A pair who ran operations for a family distribution business. They "
+                     "know how to source, cost, and deliver reliably and they play it safe — "
+                     "but a plain-wrapper brand and a thin marketing instinct mean they can "
+                     "under-sell a genuinely good offer.",
     },
     {
         "name": "Domain-Expert Founders",
@@ -60,6 +72,10 @@ FOUNDER_CARDS = [
         "hours": 160,
         "risk": "Low",
         "ethics": "Cautious about vulnerable populations",
+        "backstory": "Former care-sector staff who have lived the problem and are trusted by "
+                     "the people they'd serve. That access is gold — but they have the "
+                     "smallest budget, can't build technology themselves, and must be careful "
+                     "testing with a vulnerable population.",
     },
     {
         "name": "Growth & Sales Founders",
@@ -69,6 +85,10 @@ FOUNDER_CARDS = [
         "hours": 110,
         "risk": "High",
         "ethics": "Transparent advertising only",
+        "backstory": "Natural closers who cut their teeth selling to small-business owners. "
+                     "They can get meetings and generate demand fast — the danger is selling "
+                     "a promise they can't yet design or build, so evidence has to keep pace "
+                     "with their pipeline.",
     },
     {
         "name": "Finance-Minded Founders",
@@ -78,21 +98,47 @@ FOUNDER_CARDS = [
         "hours": 90,
         "risk": "Moderate",
         "ethics": "Avoids predatory lending models",
+        "backstory": "Analysts who left finance to start something real. They have the "
+                     "deepest pockets and the sharpest read on pricing and unit economics — "
+                     "but the fewest customer relationships and the shortest founder week, so "
+                     "they must spend deliberately to earn access.",
     },
 ]
 
-# A neutral, well-rounded founder card used by the "balanced" quick setup so that
+# A neutral, well-rounded founding team used by the "balanced" quick setup so that
 # no team starts with an inherent skill advantage.
 BALANCED_FOUNDER_CARD = {
-    "name": "Balanced Founders",
-    "skills": "A rounded mix of design, technical, and commercial ability with no single "
-              "dominant strength or fatal gap",
+    "name": "Balanced Founding Team",
+    "skills": "A rounded mix of design, technical, and commercial ability across the "
+              "founders — no single dominant strength and no fatal gap",
     "networks": "University community plus a few local businesses",
     "budget": 3000,
     "hours": 120,
     "risk": "Moderate",
     "ethics": "Committed to honest, privacy-respecting practices",
+    "backstory": "A complementary team that met in this program: one leans creative, one "
+                 "leans technical, one leans commercial. No one carries the venture alone "
+                 "and no single skill is missing — which means your advantage won't come "
+                 "from a lucky starting hand, but from the evidence you go out and earn.",
 }
+
+
+def founder_backstory(card, member_names=None):
+    """The founding-team backstory for a card, optionally naming the real students on
+    the team (from an imported roster)."""
+    if not card:
+        return ""
+    story = card.get("backstory", "")
+    names = [n for n in (member_names or []) if n]
+    if names:
+        if len(names) == 1:
+            who = names[0]
+        elif len(names) == 2:
+            who = f"{names[0]} and {names[1]}"
+        else:
+            who = ", ".join(names[:-1]) + f", and {names[-1]}"
+        story = f"**Your founding team: {who}.** " + story
+    return story
 
 # --------------------------------------------------------------------------- #
 # Difficulty levels — set the starting resources every team receives.
@@ -186,7 +232,7 @@ FOUNDER_CARD_SKILLS = {
     "Domain-Expert Founders": {"customer_research": 4, "responsible": 3, "technical": 0, "finance": 1},
     "Growth & Sales Founders": {"sales": 4, "customer_research": 2, "design": 2, "finance": 1},
     "Finance-Minded Founders": {"finance": 4, "operations": 2, "customer_research": 1},
-    "Balanced Founders": {k: 2 for k in FOUNDER_SKILL_KEYS},
+    "Balanced Founding Team": {k: 2 for k in FOUNDER_SKILL_KEYS},
 }
 
 
@@ -979,58 +1025,90 @@ CONCEPT_CHECKS = {
 CONCEPT_QUIZ = {
     "Entrepreneurial opportunity vs. idea": [
         ("An opportunity is a real, important customer problem worth solving — not just a "
-         "product you imagine.", True)],
+         "product you imagine.", True),
+        ("The strength of an opportunity is proven mainly by how excited the founders are "
+         "about the idea.", False),
+        ("Two teams can pursue the same opportunity with very different products.", True)],
     "Effectuation: bird-in-hand": [
         ("Effectuation means starting from a fixed goal and predicting returns before you act.",
-         False)],
+         False),
+        ("The bird-in-hand principle says to start from who you are, what you know, and whom "
+         "you know.", True)],
     "Customer segment hypotheses": [
         ("A good customer-segment hypothesis is specific enough that you could go find five of "
-         "those customers.", True)],
+         "those customers.", True),
+        ("“Everyone who eats” is a strong, testable customer segment.", False),
+        ("Narrowing a segment makes it easier to find and talk to real customers.", True)],
     "Behavior vs. opinion": [
         ("What a customer actually did is stronger evidence than what they said they might do.",
-         True)],
+         True),
+        ("A signed pre-order is stronger evidence than a survey rating of 5/5.", True),
+        ("Enthusiastic verbal interest reliably predicts future purchases.", False)],
     "Pattern vs. contradiction": [
         ("If new evidence contradicts your belief, the disciplined response is to ignore it and "
-         "keep going.", False)],
+         "keep going.", False),
+        ("A repeated pattern across several independent customers is stronger than one vivid "
+         "anecdote.", True)],
     "Unsupported beliefs": [
-        ("An untested assumption should be treated as fact if it feels obviously true.", False)],
+        ("An untested assumption should be treated as fact if it feels obviously true.", False),
+        ("The most dangerous assumptions are the ones that are both important and untested.",
+         True)],
     "Problem–solution fit": [
         ("Problem–solution fit means your offer relieves pains and creates gains the customer "
-         "actually cares about.", True)],
+         "actually cares about.", True),
+        ("You can claim problem–solution fit before you've shown the problem is real.", False)],
     "Confidence vs. evidence": [
         ("Betting heavily on an idea your evidence doesn't support is rewarded in this "
-         "simulation.", False)],
+         "simulation.", False),
+        ("Calibration means your confidence should match the strength of your evidence.", True)],
     "Block interdependence": [
         ("Changing one block of the Business Model Canvas can force changes in the others.",
-         True)],
+         True),
+        ("Each canvas block can be designed in isolation without affecting the rest.", False)],
     "Value capture": [
         ("Value capture is about how the business earns revenue and sustains itself, not only "
-         "the value it creates for customers.", True)],
+         "the value it creates for customers.", True),
+        ("Creating value for customers automatically guarantees the business captures value.",
+         False)],
     "Learning per dollar": [
-        ("The best experiment is always the most expensive and thorough one.", False)],
+        ("The best experiment is always the most expensive and thorough one.", False),
+        ("A good early experiment maximizes learning per dollar and per founder-hour.", True)],
     "Sunk-cost discipline": [
         ("Money and time already spent should decide whether you keep pursuing a failing idea.",
-         False)],
+         False),
+        ("Decisions should be based on expected future value, not on what you've already "
+         "invested.", True)],
     "Revenue & cost structure": [
-        ("A business model needs both how it earns money and what it costs to deliver.", True)],
+        ("A business model needs both how it earns money and what it costs to deliver.", True),
+        ("Revenue streams alone, without a cost structure, describe a complete business model.",
+         False)],
     "Unit economics": [
-        ("Unit economics ask whether a single sale earns more than it costs to serve.", True)],
+        ("Unit economics ask whether a single sale earns more than it costs to serve.", True),
+        ("A business can scale profitably even when each unit loses money.", False)],
     "Contribution margin": [
-        ("Contribution margin is revenue per unit minus the variable cost of that unit.", True)],
+        ("Contribution margin is revenue per unit minus the variable cost of that unit.", True),
+        ("Contribution margin ignores variable costs entirely.", False)],
     "Defensibility": [
         ("Defensibility is about why competitors can't easily copy or undercut your model.",
-         True)],
+         True),
+        ("Being first is, by itself, a durable defense against competitors.", False)],
     "Business-model coherence": [
         ("A coherent business model has blocks that reinforce each other and are backed by "
-         "evidence.", True)],
+         "evidence.", True),
+        ("A model is coherent as long as every block is filled in, regardless of evidence.",
+         False)],
     "Due diligence": [
         ("Investors accept a founder's claims at face value without checking the evidence.",
-         False)],
+         False),
+        ("Due diligence tests whether the evidence actually supports the founder's claims.",
+         True)],
     "Remaining uncertainty": [
-        ("A strong final pitch honestly states what is still an untested assumption.", True)],
+        ("A strong final pitch honestly states what is still an untested assumption.", True),
+        ("Admitting remaining uncertainty always makes a pitch weaker.", False)],
     "Next experiment": [
         ("Once you have a business model, there's no value in identifying the next experiment.",
-         False)],
+         False),
+        ("Even a validated model has a most-valuable next test to de-risk it further.", True)],
 }
 
 # Domain vocabulary used to check that a written answer actually engages with the
@@ -1290,6 +1368,14 @@ AI_STATUS_OPTIONS = ["Unverified", "Verified", "Rejected", "Modified"]
 AI_TOOL_AREAS = [
     "Customer Profile", "Value Proposition", "Business Model", "Assumptions",
     "Experiment design", "Pricing / economics", "Pivot reasoning", "Investor narrative", "Other",
+]
+
+# Which generative-AI tool/model the student used — recorded on every log so the
+# audit trail shows the model and (via the log's timestamp) the date/time of use.
+AI_MODELS = [
+    "ChatGPT (GPT-4o / GPT-5)", "Claude (Anthropic)", "Google Gemini",
+    "Microsoft Copilot", "Meta AI (Llama)", "Perplexity", "GitHub Copilot",
+    "DeepSeek", "Grok (xAI)", "Other / not listed",
 ]
 
 # Structured, one-tap AUDIT picks — faster and more honest than free text.

@@ -299,10 +299,16 @@ def _ai_full_log(team, area, key, existing=None):
         else:
             tool_area = st.selectbox("Where did you use AI?", content.AI_TOOL_AREAS,
                                      key=f"af_area_{key}")
-        use_type = st.selectbox("How did you use the AI?", content.AI_USE_TYPES,
-                                index=_idx(content.AI_USE_TYPES, e.get("use_type")),
-                                key=f"af_use_{key}",
-                                help="An indication of the kind of help — this is recorded.")
+        mc1, mc2 = st.columns(2)
+        ai_model = mc1.selectbox("Which AI did you use?", content.AI_MODELS,
+                                 index=_idx(content.AI_MODELS, e.get("ai_model")),
+                                 key=f"af_model_{key}",
+                                 help="Recorded with the date & time so your log shows exactly "
+                                      "which model produced this — the standard AI-use citation.")
+        use_type = mc2.selectbox("How did you use the AI?", content.AI_USE_TYPES,
+                                 index=_idx(content.AI_USE_TYPES, e.get("use_type")),
+                                 key=f"af_use_{key}",
+                                 help="An indication of the kind of help — this is recorded.")
         prompt = st.text_area("Your prompt (required)", value=e.get("prompt", ""),
                               key=f"af_p_{key}",
                               placeholder="Paste or paraphrase what you asked the AI.")
@@ -361,7 +367,7 @@ def _ai_full_log(team, area, key, existing=None):
                 st.error("Both the **prompt** and the **AI response** are required.")
             else:
                 fields = {
-                    "tool_area": tool_area, "use_type": use_type,
+                    "tool_area": tool_area, "use_type": use_type, "ai_model": ai_model,
                     "prompt": prompt, "ai_output": output,
                     "audit_a": _join(a_assum, notes["a"]),
                     "audit_u": _join(a_unsup, notes["u"]),
@@ -670,14 +676,23 @@ def round_briefing(team):
     st.markdown("**🤖 Generative AI this round**")
     st.markdown(content.AI_PROTOCOL_SUMMARY)
 
-    with st.expander(f"Full {logic.total_rounds()}-round plan (how complexity builds)"):
-        st.dataframe(
-            [{"Round": row["round"],
-              "Material": " + ".join(t["title"] for t in row["topics"]) or "—",
-              "Tasks": " / ".join(t["sim_task"] for t in row["topics"])}
-             for row in logic.get_schedule()],
-            use_container_width=True, hide_index=True,
-        )
+    with st.expander(f"🗺️ Full {logic.total_rounds()}-round map — what opens each round"):
+        st.caption("The whole journey at a glance. **🔓 marks the new tools that unlock** each "
+                   "round — your current round is highlighted so you can see what just opened and "
+                   "what's coming next.")
+        for r in logic.round_map():
+            here = r["round"] == cur
+            head = f"{'👉 ' if here else ''}**Round {r['round']}**"
+            if here:
+                head += " · you are here"
+            st.markdown(head)
+            if r["titles"]:
+                st.markdown("  · Covers: " + " + ".join(r["titles"]))
+            if r["new_tools"]:
+                st.markdown("  · 🔓 New tools: **" + ", ".join(r["new_tools"]) + "**")
+            if r["concepts"]:
+                st.caption("  Concepts: " + ", ".join(r["concepts"]))
+            st.markdown("")
 
 
 # --------------------------------------------------------------------------- #
@@ -1392,16 +1407,31 @@ def demo_day(team):
     if not is_open:
         return
 
-    # ---- Vote on peers -------------------------------------------------------
+    # ---- Invest in peers -----------------------------------------------------
     st.divider()
-    st.write("### Read & vote on the strongest ventures")
-    my_votes = db.votes_by_voter(gid, team["id"])
-    st.caption(f"Vote for up to **{logic.DEMO_VOTES_PER_TEAM}** OTHER teams with the best "
-               f"evidence-backed case — you can't vote for yourself. Used {len(my_votes)}/"
-               f"{logic.DEMO_VOTES_PER_TEAM}.")
+    st.write("### 💰 Invest in the strongest ventures")
+    cfg = logic.demo_config(gid)
+    state = logic.demo_investment_state(gid, team["id"])
+    st.caption(f"You're a syndicate with **${cfg['fund']:,}** to invest across OTHER teams' "
+               f"ventures (not your own). Put your money where the **evidence** is strongest — "
+               f"and spread it across at least **{cfg['min_teams']}** ventures.")
+    mc1, mc2, mc3 = st.columns(3)
+    mc1.metric("Fund", f"${cfg['fund']:,}")
+    mc2.metric("Invested", f"${state['spent']:,}")
+    mc3.metric("Remaining", f"${state['remaining']:,}",
+               delta=None if state["remaining"] >= 0 else "over budget")
+    if state["over_budget"]:
+        st.error("You've allocated more than your fund — reduce some amounts.")
+    elif state["backed"] < cfg["min_teams"]:
+        st.warning(f"Spread your investment across at least {cfg['min_teams']} ventures "
+                   f"(currently backing {state['backed']}).")
+    elif state["ok"]:
+        st.success("✅ Your allocation meets the rules. You can still rebalance any time.")
+
     peers = [pp for pp in db.list_pitches(gid) if pp["team_id"] != team["id"]]
     if not peers:
         st.info("No other pitches submitted yet — check back once teams have saved theirs.")
+    invested = state["invested"]
     for pp in peers:
         other = db.get_team(pp["team_id"])
         ident = logic.team_identity(other)
@@ -1413,34 +1443,81 @@ def demo_day(team):
                 st.caption(f"💪 Strongest evidence: {pp['best_evidence']}")
             if pp.get("ask"):
                 st.caption(f"🙋 Ask: {pp['ask']}")
-            voted = pp["team_id"] in my_votes
-            if voted:
-                if st.button("★ Voted — click to undo", key=f"vote_{pp['team_id']}"):
-                    db.remove_vote(gid, team["id"], pp["team_id"])
-                    st.rerun()
-            else:
-                disabled = len(my_votes) >= logic.DEMO_VOTES_PER_TEAM
-                if st.button("☆ Vote for this venture", key=f"vote_{pp['team_id']}",
-                             disabled=disabled,
-                             help="Out of votes — undo one first." if disabled else None):
-                    db.cast_vote(gid, team["id"], pp["team_id"])
-                    st.rerun()
+            cur_amt = int(invested.get(pp["team_id"], 0))
+            ac1, ac2 = st.columns([3, 1])
+            amt = ac1.number_input(f"Invest in {ident['display']} ($)", 0, cfg["fund"], cur_amt,
+                                   step=50, key=f"inv_{pp['team_id']}")
+            if ac2.button("Save", key=f"invsave_{pp['team_id']}"):
+                db.set_investment(gid, team["id"], pp["team_id"], int(amt))
+                st.rerun()
 
     # ---- Live results --------------------------------------------------------
     st.divider()
-    st.write("### 🏆 Live results")
+    st.write("### 🏆 Live leaderboard — dollars raised")
     medals = {1: "🥇", 2: "🥈", 3: "🥉"}
-    for r in logic.demo_results(gid):
+    res = logic.demo_results(gid)
+    for r in res["rows"]:
         ident = logic.team_identity(r["team"])
         me = r["team"]["id"] == team["id"]
         label = f"{ident['mascot']} **You** ({ident['display']})" if me else \
             f"{ident['mascot']} {ident['display']}"
-        st.markdown(f"{medals.get(r['rank'], '#'+str(r['rank']))} {label} — **{r['votes']}** vote(s)")
+        st.markdown(f"{medals.get(r['rank'], '#'+str(r['rank']))} {label} — "
+                    f"**${r['raised']:,}** from {r['backers']} backer(s)")
 
 
 # --------------------------------------------------------------------------- #
 # Founder & Opportunity
 # --------------------------------------------------------------------------- #
+def _score_bar(label, val):
+    """A compact 0–5 score row with a filled bar."""
+    filled = "█" * int(round(val)) + "░" * (5 - int(round(val)))
+    st.markdown(f"**{label}:** `{filled}` {val:.1f}/5")
+
+
+def _venture_name_section(team, editable):
+    """Name your venture, and get a creativity / brand-value / fit evaluation."""
+    st.write("### 🏷️ Name your venture")
+    st.caption("A great name is memorable, easy to say, and hints at the value you create for "
+               "your customer. Enter a name to score it on **creativity**, **brand value**, and "
+               "**fit** with your customer and venture. You can rename and re-score anytime.")
+    saved = db.get_venture_name(team["id"])
+    cur_name = saved.get("name", "")
+    if cur_name:
+        st.success(f"Current venture name: **{cur_name}**")
+    _ai_ack_popover(team, "Venture name", "vname_ai", label=_AI_LOG_LABEL)
+    with st.form("venture_name_form", clear_on_submit=False):
+        name = st.text_input("Venture name", value=cur_name,
+                             placeholder="e.g. FoodLoop, MendKit, GreenGrable",
+                             disabled=not editable)
+        submitted = st.form_submit_button("Score & save name", type="primary",
+                                          disabled=not editable)
+    if submitted:
+        if not name.strip():
+            st.error("Enter a name to score it.")
+        else:
+            ev = logic.evaluate_venture_name(name, team["id"])
+            db.set_venture_name(team["id"], name.strip(), ev)
+            st.rerun()
+    # Show the latest evaluation.
+    scores = saved.get("scores") or {}
+    if cur_name and scores:
+        with st.container(border=True):
+            st.markdown(f"#### Evaluation of “{cur_name}”")
+            oc1, oc2 = st.columns([1, 2])
+            with oc1:
+                st.metric("Overall", f"{scores.get('overall', 0):.1f}/5")
+            with oc2:
+                _score_bar("Creativity", scores.get("creativity", 0))
+                _score_bar("Brand value", scores.get("brand", 0))
+                _score_bar("Customer / venture fit", scores.get("fit", 0))
+            for n in scores.get("notes", []):
+                st.caption(f"• {n}")
+            if scores.get("ai"):
+                st.markdown(f"🔵 **Brand strategist's note:** {scores['ai']}")
+            elif logic.ai_available():
+                st.caption("Re-save to include an AI brand critique.")
+
+
 def founder_opportunity(team):
     st.subheader("🧭 Founder & Opportunity Formation")
     _why("Founder & Opportunity")
@@ -1479,6 +1556,11 @@ def founder_opportunity(team):
             hc2.markdown(f"### {card.get('name','—')}")
             hc2.caption(f"Founding team · {team['name']} · Risk appetite: "
                         f"{card.get('risk','—')}")
+            # Founding-team backstory — names the real students if a roster was imported.
+            _members = logic.team_member_names(team)
+            _story = content.founder_backstory(card, _members)
+            if _story:
+                st.markdown(f"> {_story}")
             st.caption("Click the ❓ beside any attribute to learn what it means and how it "
                        "shapes play.")
             rows = [
@@ -1503,6 +1585,9 @@ def founder_opportunity(team):
     st.write(f"### Opportunity territory\n**{team['opportunity'] or '—'}**")
     st.caption("📬 Your welcome email in the **Inbox** maps out how to get started in this "
                "territory and how to make a strong first round.")
+
+    st.divider()
+    _venture_name_section(team, editable)
 
     st.divider()
     if db.has_ack(team["id"], "founder_review"):
@@ -2566,9 +2651,22 @@ def reflections(team):
 
     _ai_check_notice(team, tool_area="Investor narrative")
 
-    # Remember who's writing so they don't retype every round.
-    name = st.text_input("Your name", value=st.session_state.get("journal_name", ""),
-                         help="Remembered for this session so you don't retype it.")
+    # Remember who's writing so they don't retype every round. If the team was
+    # imported with a roster, offer those member names as a picker.
+    members = logic.team_member_names(team)
+    if members:
+        opts = members + ["✍️ Someone else…"]
+        prev = st.session_state.get("journal_name", "")
+        idx = opts.index(prev) if prev in members else 0
+        pick = st.selectbox("Your name", opts, index=idx,
+                            help="Pick your name from the team roster.")
+        if pick == "✍️ Someone else…":
+            name = st.text_input("Type your name", value=("" if prev in members else prev))
+        else:
+            name = pick
+    else:
+        name = st.text_input("Your name", value=st.session_state.get("journal_name", ""),
+                             help="Remembered for this session so you don't retype it.")
     if name:
         st.session_state["journal_name"] = name
 
@@ -2719,7 +2817,13 @@ def ai_assist(team):
         for l in logs:
             icon = {"Verified": "✅", "Rejected": "❌", "Modified": "✏️"}.get(l["status"], "⏳")
             _use = f" · {l['use_type']}" if l.get("use_type") else ""
-            with st.expander(f"{icon} R{l['round']} · {l['tool_area']}{_use} · {l['status']}"):
+            _mdl = f" · {l['ai_model']}" if l.get("ai_model") else ""
+            with st.expander(f"{icon} R{l['round']} · {l['tool_area']}{_mdl}{_use} · {l['status']}"):
+                # Standard AI-use statement — auto-records the model and date/time.
+                _mdl_txt = l.get("ai_model") or "an AI assistant"
+                _when = l.get("created_at") or "—"
+                st.markdown(f"🧾 **AI-use statement:** Used **{_mdl_txt}** on **{_when}** "
+                            f"to {(l.get('use_type') or 'assist').lower()} for *{l['tool_area']}*.")
                 if l.get("prompt"):
                     st.write(f"**Prompt:** {l['prompt']}")
                 st.write(f"**AI output:** {l['ai_output'] or '—'}")

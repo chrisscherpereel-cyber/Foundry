@@ -372,6 +372,7 @@ def init_db():
         _ensure_column(conn, "ai_logs", "assumption_id", "INTEGER")
         _ensure_column(conn, "ai_logs", "experiment_id", "INTEGER")
         _ensure_column(conn, "ai_logs", "use_type", "TEXT")   # how the AI was used
+        _ensure_column(conn, "ai_logs", "ai_model", "TEXT")   # which AI tool/model was used
         # Multi-game: teams belong to a game (cohort); each game advances on its own.
         _ensure_column(conn, "teams", "game_id", "INTEGER")
         _ensure_column(conn, "teams", "roster", "TEXT")       # JSON member roster
@@ -379,6 +380,9 @@ def init_db():
         _ensure_column(conn, "teams", "display_name", "TEXT")
         _ensure_column(conn, "teams", "color", "TEXT")
         _ensure_column(conn, "teams", "mascot", "TEXT")
+        # Venture naming — the team's chosen product/company name + its scored evaluation.
+        _ensure_column(conn, "teams", "venture_name", "TEXT")
+        _ensure_column(conn, "teams", "venture_name_scores", "TEXT")   # JSON eval
         conn.execute("""CREATE TABLE IF NOT EXISTS badges (
             team_id  INTEGER NOT NULL,
             code     TEXT NOT NULL,
@@ -401,6 +405,8 @@ def init_db():
             votee_team_id INTEGER NOT NULL,
             created_at    TEXT,
             PRIMARY KEY (game_id, voter_team_id, votee_team_id))""")
+        # Demo Day money allocation — dollars a voter invests in each pitch.
+        _ensure_column(conn, "demo_votes", "amount", "INTEGER DEFAULT 0")
         # Decision Journal: one round-adaptive focus question per entry.
         _ensure_column(conn, "reflections", "focus_prompt", "TEXT")
         _ensure_column(conn, "reflections", "focus_answer", "TEXT")
@@ -1206,8 +1212,8 @@ def add_ai_log(team_id, data):
             """INSERT INTO ai_logs(team_id, round, tool_area, prompt, ai_output,
                 audit_a, audit_u, audit_d, audit_i, audit_t, status,
                 claim_type, data_source, verify_plan, assumption_id, experiment_id,
-                use_type, created_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                use_type, ai_model, created_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (team_id, data.get("round", 1), data.get("tool_area", ""),
              data.get("prompt", ""), data.get("ai_output", ""),
              data.get("audit_a", ""), data.get("audit_u", ""), data.get("audit_d", ""),
@@ -1215,7 +1221,8 @@ def add_ai_log(team_id, data):
              data.get("status", "Unverified"),
              data.get("claim_type"), data.get("data_source"),
              data.get("verify_plan", ""), data.get("assumption_id"),
-             data.get("experiment_id"), data.get("use_type"), now()),
+             data.get("experiment_id"), data.get("use_type"),
+             data.get("ai_model"), now()),
         )
         conn.commit()
         return cur.lastrowid
@@ -1768,5 +1775,72 @@ def vote_tally(game_id):
             "SELECT votee_team_id, COUNT(*) AS n FROM demo_votes WHERE game_id=? "
             "GROUP BY votee_team_id", (game_id,)).fetchall()
         return {r["votee_team_id"]: r["n"] for r in rows}
+    finally:
+        conn.close()
+
+
+# ---- Demo Day money allocation --------------------------------------------- #
+def set_investment(game_id, voter_team_id, votee_team_id, amount):
+    """Set the dollars a voter invests in one pitch (0 removes it)."""
+    conn = get_conn()
+    try:
+        if amount and amount > 0:
+            conn.execute(
+                "INSERT INTO demo_votes(game_id, voter_team_id, votee_team_id, amount, created_at) "
+                "VALUES(?,?,?,?,?) ON CONFLICT(game_id, voter_team_id, votee_team_id) "
+                "DO UPDATE SET amount=excluded.amount, created_at=excluded.created_at",
+                (game_id, voter_team_id, votee_team_id, int(amount), now()))
+        else:
+            conn.execute("DELETE FROM demo_votes WHERE game_id=? AND voter_team_id=? "
+                         "AND votee_team_id=?", (game_id, voter_team_id, votee_team_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def investments_by_voter(game_id, voter_team_id):
+    """{votee_team_id: amount} for one voting team."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT votee_team_id, amount FROM demo_votes WHERE game_id=? AND voter_team_id=?",
+            (game_id, voter_team_id)).fetchall()
+        return {r["votee_team_id"]: (r["amount"] or 0) for r in rows}
+    finally:
+        conn.close()
+
+
+def investment_tally(game_id):
+    """{votee_team_id: total dollars raised} across all voters."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT votee_team_id, COALESCE(SUM(amount),0) AS d FROM demo_votes WHERE game_id=? "
+            "GROUP BY votee_team_id", (game_id,)).fetchall()
+        return {r["votee_team_id"]: r["d"] for r in rows}
+    finally:
+        conn.close()
+
+
+# ---- Venture name ---------------------------------------------------------- #
+def set_venture_name(team_id, name, scores=None):
+    conn = get_conn()
+    try:
+        conn.execute("UPDATE teams SET venture_name=?, venture_name_scores=? WHERE id=?",
+                     (name, _dumps(scores or {}), team_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_venture_name(team_id):
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT venture_name, venture_name_scores FROM teams WHERE id=?",
+                           (team_id,)).fetchone()
+        if not row:
+            return {"name": "", "scores": {}}
+        return {"name": row["venture_name"] or "",
+                "scores": _loads(row["venture_name_scores"]) if row["venture_name_scores"] else {}}
     finally:
         conn.close()

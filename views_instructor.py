@@ -45,8 +45,11 @@ def _ai_feedback_settings():
                             format_func=lambda k: logic.AI_PROVIDERS[k]["label"],
                             key="ai_prov_sel")
         pinfo = logic.AI_PROVIDERS[prov]
-        st.caption(f"Get a free key: {pinfo['keys_url']}  ·  This provider's default model: "
-                   f"**{pinfo['model']}**")
+        _dm = pinfo["model"]
+        _dm_note = (" (auto-tracks Google's current Flash model — never goes stale)"
+                    if _dm.endswith("-latest") else "")
+        st.caption(f"Get a free key: {pinfo['keys_url']}  ·  Default model: **{_dm}**{_dm_note}. "
+                   "Leave the Model box on the default unless you need a specific version.")
         # When the provider changes, default the model/base to that provider's values
         # (per-provider widget keys keep each provider's fields independent).
         same = (prov == cfg["provider"])
@@ -92,6 +95,65 @@ def _ai_comment_button(team_id, key, round_no=None):
         else:
             st.warning("No AI comment (check your key in Round Control → AI feedback).")
     return cache.get(ck)
+
+
+def _mail_settings():
+    """Director control over the two mail tracks and how each is sent."""
+    with st.expander("✉️ Team mail — Foundry note + Managing Partner note"):
+        st.caption("Two messages can go to each team's Inbox after a round: a **deterministic "
+                   "venture review from Venture Foundry** (always available) and an **optional "
+                   "personal note from the Managing Partner (Vera Sloan)** written by AI (needs a "
+                   "key in AI feedback above). Choose whether each **auto-sends when the round "
+                   "advances** or waits for you to send it manually per team.")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**Venture Foundry note** (deterministic)")
+            f_auto = st.radio("Send this note…", ["Manually (I click send)", "Automatically on advance"],
+                              index=1 if logic.mail_auto("foundry") else 0, key="mail_foundry_mode")
+        with c2:
+            st.markdown("**Managing Partner note** (AI)")
+            if logic.ai_available():
+                m_auto = st.radio("Send this note… ", ["Manually (I click send)", "Automatically on advance"],
+                                  index=1 if logic.mail_auto("mp") else 0, key="mail_mp_mode")
+            else:
+                m_auto = "Manually (I click send)"
+                st.caption("➕ Add an AI key in **AI feedback** above to enable the Managing "
+                           "Partner note.")
+        if st.button("Save mail settings"):
+            logic.set_mail_auto("foundry", f_auto.startswith("Automatically"))
+            logic.set_mail_auto("mp", m_auto.startswith("Automatically"))
+            st.success("Mail settings saved.")
+            st.rerun()
+
+        st.divider()
+        st.markdown("**Send now** (manual) — for the round the cohort is currently on")
+        teams = db.list_teams()
+        rnd = db.current_round()
+        s1, s2 = st.columns(2)
+        if s1.button(f"📨 Send Foundry notes · Round {rnd}", disabled=not teams):
+            for t in teams:
+                logic.send_foundry_feedback(t["id"], rnd)
+            st.success(f"Foundry venture-review notes sent to {len(teams)} team(s).")
+        mp_disabled = not (teams and logic.ai_available())
+        if s2.button(f"📨 Send Managing Partner notes · Round {rnd}", disabled=mp_disabled,
+                     help=None if logic.ai_available() else "Configure an AI key first."):
+            sent = sum(1 for t in teams if logic.send_managing_partner_note(t["id"], rnd))
+            st.success(f"Managing Partner notes sent to {sent} team(s).")
+
+
+def _pre_advance_checklist_ui(round_no):
+    """A 'before you advance' checklist so nothing is forgotten on a manual advance."""
+    chk = logic.pre_advance_checklist(round_no)
+    with st.expander(f"✅ Before you advance — Round {chk['round']} checklist "
+                     f"({chk['done']}/{chk['total']} ready)",
+                     expanded=not chk["all_ok"]):
+        st.caption("These are reminders, not hard blocks — you can advance whenever you want. "
+                   "They just help make sure nothing for this round is left undone.")
+        for it in chk["items"]:
+            icon = "✅" if it["ok"] else "⬜"
+            st.markdown(f"{icon} **{it['label']}** — {it['detail']}")
+        if chk["all_ok"]:
+            st.success("Everything's handled — good to advance.")
 
 
 # --------------------------------------------------------------------------- #
@@ -242,7 +304,7 @@ def auto_director():
             # Feedback email — preview & send (deterministic; optional AI comment)
             st.markdown("**Feedback email (venture review)**")
             fb = logic.generate_feedback(t["id"], rnd, sc)
-            with st.popover("Preview / edit"):
+            with st.expander("Preview / edit"):
                 subj = st.text_input("Subject", value=fb["subject"], key=f"fb_subj_{t['id']}")
                 ai_txt = _ai_comment_button(t["id"], f"auto_{t['id']}", rnd)
                 default_body = fb["body"]
@@ -484,6 +546,9 @@ def round_control():
         titles = [t["title"] for t in logic.topics_for_round(rnd)]
         return tools, titles
 
+    # Before you advance — a completion checklist for the round about to close.
+    _pre_advance_checklist_ui(cur)
+
     if cur < total:
         ntools, ntitles = _unlocks_for(cur + 1)
         st.markdown(f"### ▶️ Advance the cohort to Round {cur + 1}")
@@ -499,7 +564,15 @@ def round_control():
             new_r = cur + 1
             db.set_current_round(new_r)
             logic.on_round_change(new_r)   # apply learning, reset hours, charge salaries
+            mail = logic.deliver_round_mail(cur)   # auto-send switched-on mail for the closing round
             msg = f"Advanced to Round {new_r} — its tools are now unlocked for all teams."
+            if mail["foundry"] or mail["mp"]:
+                bits = []
+                if mail["foundry"]:
+                    bits.append(f"{mail['foundry']} Foundry note(s)")
+                if mail["mp"]:
+                    bits.append(f"{mail['mp']} Managing Partner note(s)")
+                msg += " Auto-sent " + " and ".join(bits) + "."
             if logic.auto_flag("auto_run_on_advance", default=False):
                 logic.run_autopilot(new_r)
                 msg += " Auto-Director applied."
@@ -564,6 +637,7 @@ def round_control():
             st.success("Round mode saved.")
 
     _ai_feedback_settings()
+    _mail_settings()
 
     # ---- Economy & balance --------------------------------------------------
     with st.expander("💲 Economy & balance — tune the numbers"):
@@ -635,14 +709,17 @@ def round_control():
         st.warning("No material is assigned to this round. Add some on Schedule & Timing.")
 
     st.divider()
-    st.write(f"### {total}-round map")
-    st.caption("The current schedule. Add/remove/move material, change the number of rounds, "
-               "and set advance times on the **Schedule & Timing** page.")
+    st.write(f"### {total}-round map — what opens each round")
+    st.caption("The full semester at a glance: what each round covers, the **new tools that "
+               "unlock**, and the concepts introduced. Edit material, round count, and advance "
+               "times on the **Schedule & Timing** page.")
     st.dataframe(
-        [{"Round": row["round"],
-          "Material": " + ".join(t["title"] for t in row["topics"]) or "—",
-          "Advance at": row["advance_at"] or "—"}
-         for row in logic.get_schedule()],
+        [{"Round": r["round"],
+          "Material": " + ".join(r["titles"]) or "—",
+          "🔓 New tools this round": ", ".join(r["new_tools"]) or "—",
+          "Concepts introduced": ", ".join(r["concepts"]) or "—",
+          "Advance at": r["advance_at"] or "—"}
+         for r in logic.round_map()],
         use_container_width=True, hide_index=True,
     )
 
@@ -748,15 +825,36 @@ def demo_day_admin():
     st.subheader("🎤 Demo Day — Evidence Exchange")
     _guide(
         "Your capstone. Open the Evidence Exchange for this game and teams can submit a short "
-        "pitch with their strongest evidence, then vote on each other's ventures. Peer votes "
-        "and social comparison make the finale an authentic, motivating close to the semester.",
+        "pitch with their strongest evidence, then **invest a fixed fund** across each other's "
+        "ventures. Allocating real (pretend) money — rather than a simple vote — forces teams to "
+        "weigh evidence and spread their bets, making the finale an authentic investor moment.",
         steps=[
+            "Set each team's investment fund and how many ventures they must spread it across.",
             "When the cohort is ready to present, click Open Demo Day.",
-            "Teams submit pitches and vote on the student Demo Day page.",
-            "Watch the live results here; close it when voting is done.",
+            "Teams submit pitches and allocate their fund on the student Demo Day page.",
+            "Watch the live 'dollars raised' leaderboard here; close it when investing is done.",
         ],
     )
     gid = db.active_game_id()
+
+    # ---- Investing rules the director configures ----------------------------
+    cfg = logic.demo_config(gid)
+    n_other = max(1, cfg["teams"] - 1)
+    with st.expander("💰 Investing rules", expanded=True):
+        st.caption("Each team receives this fund to invest across OTHER teams' pitches, and must "
+                   "spread it across at least the minimum number of ventures (so they can't dump "
+                   "it all on one favorite).")
+        r1, r2 = st.columns(2)
+        fund = r1.number_input("Investment fund per team ($)", 100, 100000, cfg["fund"], step=100,
+                               help="How much 'money' each team gets to allocate.")
+        min_teams = r2.number_input("Minimum ventures each team must back", 1, n_other,
+                                    min(cfg["min_teams"], n_other),
+                                    help="They must invest in at least this many different teams.")
+        if st.button("Save investing rules"):
+            logic.set_demo_config(gid, fund=fund, min_teams=min_teams)
+            st.success("Saved.")
+            st.rerun()
+
     open_now = logic.demo_is_open(gid)
     c1, c2 = st.columns([1, 2])
     if open_now:
@@ -787,15 +885,18 @@ def demo_day_admin():
                 st.caption(f"🙋 Ask: {p['ask']}")
 
     st.divider()
-    st.write("### 🏆 Results")
+    st.write("### 🏆 Results — dollars raised")
     medals = {1: "🥇", 2: "🥈", 3: "🥉"}
-    results = logic.demo_results(gid)
-    if not any(r["votes"] for r in results):
-        st.caption("No votes cast yet.")
-    for r in results:
+    res = logic.demo_results(gid)
+    rows = res["rows"]
+    if not res["total_raised"]:
+        st.caption("No investments made yet.")
+    else:
+        st.caption(f"Total invested across the cohort: **${res['total_raised']:,}**")
+    for r in rows:
         ident = logic.team_identity(r["team"])
         st.markdown(f"{medals.get(r['rank'], '#'+str(r['rank']))} {ident['mascot']} "
-                    f"**{ident['display']}** — {r['votes']} vote(s)")
+                    f"**{ident['display']}** — **${r['raised']:,}** from {r['backers']} backer(s)")
 
 
 # --------------------------------------------------------------------------- #
@@ -1027,7 +1128,7 @@ def team_setup():
                        "hints. Preview and tweak the wording before it lands in their Inbox.")
             wsent = any("Welcome" in m["subject"] for m in db.list_messages(t["id"]))
             wel = logic.generate_welcome(t["id"])
-            with st.popover("Preview / edit welcome email"):
+            with st.expander("Preview / edit welcome email"):
                 wsubj = st.text_input("Subject", value=wel["subject"], key=f"wel_subj_{t['id']}")
                 wbody = st.text_area("Body", value=wel["body"], height=340,
                                      key=f"wel_body_{t['id']}")
@@ -1428,7 +1529,7 @@ def round_scores():
     m2.metric("Committed?", "Yes" if rs["committed"] else "No")
     m3.metric("Risk penalty", f"-{rs['penalty']:.0f}")
     email = _round_score_email(team, rnd, rs)
-    with st.popover("Preview / edit score email"):
+    with st.expander("Preview / edit score email"):
         subj = st.text_input("Subject", value=email["subject"], key=f"rs_subj_{team['id']}")
         ai_txt = _ai_comment_button(team["id"], f"rs_{team['id']}", rnd)
         default_body = email["body"]
