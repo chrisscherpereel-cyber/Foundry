@@ -1024,6 +1024,50 @@ def _parse_dt(text):
         return None
 
 
+def director_advance(target):
+    """The single, canonical 'advance the cohort' action used by both Round Control
+    and the Start-here home. Advancing from the current round to `target`:
+      • moves the round and applies learning / resets hours / charges salaries,
+      • auto-delivers any switched-on mail for each round that just closed,
+      • runs the Auto-Director for the new round if that's enabled.
+    Returns a summary for the UI to report."""
+    cur = db.current_round()
+    target = int(target)
+    db.set_current_round(target)
+    on_round_change(target)
+    mail = {"foundry": 0, "mp": 0}
+    autopilot = False
+    if target > cur:
+        for ended in range(cur, target):
+            m = deliver_round_mail(ended)
+            mail["foundry"] += m["foundry"]
+            mail["mp"] += m["mp"]
+        if auto_flag("auto_run_on_advance", default=False):
+            run_autopilot(target)
+            autopilot = True
+    return {"from": cur, "to": target, "mail": mail, "autopilot": autopilot}
+
+
+# Recommended "run it for me" automation bundle — lets a first-time director put the
+# whole simulation on rails with one switch.
+RECOMMENDED_AUTOMATION = ("auto_scoring_on", "auto_events_on", "auto_pivots_on",
+                          "auto_run_on_advance")
+
+
+def recommended_automation_on():
+    """True when the full recommended automation bundle (incl. Foundry mail) is on."""
+    return all(auto_flag(k, default=False) for k in RECOMMENDED_AUTOMATION) and mail_auto("foundry")
+
+
+def set_recommended_automation(on):
+    """Turn the whole recommended bundle on or off in one call."""
+    for k in RECOMMENDED_AUTOMATION:
+        set_auto_flag(k, bool(on))
+    set_mail_auto("foundry", bool(on))
+    if on and ai_available():
+        set_mail_auto("mp", True)
+
+
 def pre_advance_checklist(round_no=None):
     """A director's 'before you advance' checklist for the round about to close, so
     nothing is forgotten when advancing manually. Each item: label, ok (bool),

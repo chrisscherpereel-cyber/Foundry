@@ -28,13 +28,28 @@ def _guide(what, steps=None, terms=None, expanded=False):
             st.markdown("\n".join(f"- **{t}** — {d}" for t, d in terms))
 
 
+# --------------------------------------------------------------------------- #
+# Sticky expander — Streamlit collapses an expander back to its default state on
+# every rerun, so a selectbox/radio/button inside one snaps it shut. These helpers
+# remember the open state in session_state and re-open it whenever a control inside
+# is used (each such control passes on_change/on_click=_keep_open).
+# --------------------------------------------------------------------------- #
+def _keep_open(state_key):
+    st.session_state[state_key] = True
+
+
+def _sticky_expander(title, state_key, default=False):
+    return st.expander(title, expanded=st.session_state.get(state_key, default))
+
+
 def _ai_feedback_settings():
     """Optional bring-your-own-key AI comment. Deterministic feedback is always on;
     this only ADDS a richer comment when a key is supplied, and costs nothing otherwise."""
     cfg = logic.get_ai_config()
     title = "🤖 Optional AI feedback (bring your own key)"
     title += " · ON" if logic.ai_available() else " · off"
-    with st.expander(title):
+    _ok = "ai_fb_open"
+    with _sticky_expander(title, _ok):
         st.caption("The simulation's feedback is always generated for free without any AI. This "
                    "adds an optional **richer AI comment** to feedback emails using a **free-tier "
                    "key you supply** (Groq or Google Gemini both have no-cost tiers). Leave it "
@@ -43,7 +58,7 @@ def _ai_feedback_settings():
         prov = st.selectbox("Provider", provs,
                             index=provs.index(cfg["provider"]),
                             format_func=lambda k: logic.AI_PROVIDERS[k]["label"],
-                            key="ai_prov_sel")
+                            key="ai_prov_sel", on_change=_keep_open, args=(_ok,))
         pinfo = logic.AI_PROVIDERS[prov]
         _dm = pinfo["model"]
         _dm_note = (" (auto-tracks Google's current Flash model — never goes stale)"
@@ -54,40 +69,41 @@ def _ai_feedback_settings():
         # (per-provider widget keys keep each provider's fields independent).
         same = (prov == cfg["provider"])
         key = st.text_input("API key", value=(cfg["key"] if same else ""), type="password",
-                            key=f"ai_key_{prov}",
+                            key=f"ai_key_{prov}", on_change=_keep_open, args=(_ok,),
                             help="Stored with the game settings. Use a free-tier key; treat it "
                                  "like a password.")
         c1, c2 = st.columns(2)
         model = c1.text_input("Model", value=(cfg["model"] if same else pinfo["model"]),
-                              key=f"ai_model_{prov}",
+                              key=f"ai_model_{prov}", on_change=_keep_open, args=(_ok,),
                               help=f"Default for this provider: {pinfo['model']}")
         base = c2.text_input("Base URL (OpenAI-compatible only)",
                              value=(cfg["base"] if same else pinfo["base"]),
-                             key=f"ai_base_{prov}")
+                             key=f"ai_base_{prov}", on_change=_keep_open, args=(_ok,))
         enabled = st.checkbox("Enable AI comments", value=(cfg["enabled"] if same else False),
-                              key=f"ai_en_{prov}")
+                              key=f"ai_en_{prov}", on_change=_keep_open, args=(_ok,))
         st.caption("⚠️ When enabled, the team's summary metrics are sent to the provider to "
                    "generate the comment. Don't include student names; free tiers have rate limits.")
         b1, b2 = st.columns(2)
-        if b1.button("Save AI settings"):
+        if b1.button("Save AI settings", on_click=_keep_open, args=(_ok,)):
             logic.set_ai_config(provider=prov, enabled=enabled, key=key, model=model, base=base)
             st.success("Saved.")
             st.rerun()
-        if b2.button("Test key"):
+        if b2.button("Test key", on_click=_keep_open, args=(_ok,)):
             logic.set_ai_config(provider=prov, enabled=True, key=key, model=model, base=base)
             ok, msg = logic.ai_test_key()
             (st.success if ok else st.error)(msg)
 
 
-def _ai_comment_button(team_id, key, round_no=None):
+def _ai_comment_button(team_id, key, round_no=None, keep_open_key=None):
     """Show an 'add AI comment' button (only when configured); returns the comment text
     to append, or None. Caches per team/round in session so it isn't re-fetched."""
     if not logic.ai_available():
         return None
     cache = st.session_state.setdefault("_ai_comments", {})
     ck = (team_id, round_no or db.current_round())
+    _btn_kw = {"on_click": _keep_open, "args": (keep_open_key,)} if keep_open_key else {}
     if st.button("✨ Add AI comment", key=f"aicmt_{key}",
-                 help="Generate a richer comment with your configured AI key."):
+                 help="Generate a richer comment with your configured AI key.", **_btn_kw):
         with st.spinner("Asking the AI…"):
             txt = logic.ai_round_comment(team_id, round_no)
         if txt:
@@ -99,7 +115,8 @@ def _ai_comment_button(team_id, key, round_no=None):
 
 def _mail_settings():
     """Director control over the two mail tracks and how each is sent."""
-    with st.expander("✉️ Team mail — Foundry note + Managing Partner note"):
+    _ok = "mail_open"
+    with _sticky_expander("✉️ Team mail — Foundry note + Managing Partner note", _ok):
         st.caption("Two messages can go to each team's Inbox after a round: a **deterministic "
                    "venture review from Venture Foundry** (always available) and an **optional "
                    "personal note from the Managing Partner (Vera Sloan)** written by AI (needs a "
@@ -109,17 +126,19 @@ def _mail_settings():
         with c1:
             st.markdown("**Venture Foundry note** (deterministic)")
             f_auto = st.radio("Send this note…", ["Manually (I click send)", "Automatically on advance"],
-                              index=1 if logic.mail_auto("foundry") else 0, key="mail_foundry_mode")
+                              index=1 if logic.mail_auto("foundry") else 0, key="mail_foundry_mode",
+                              on_change=_keep_open, args=(_ok,))
         with c2:
             st.markdown("**Managing Partner note** (AI)")
             if logic.ai_available():
                 m_auto = st.radio("Send this note… ", ["Manually (I click send)", "Automatically on advance"],
-                                  index=1 if logic.mail_auto("mp") else 0, key="mail_mp_mode")
+                                  index=1 if logic.mail_auto("mp") else 0, key="mail_mp_mode",
+                                  on_change=_keep_open, args=(_ok,))
             else:
                 m_auto = "Manually (I click send)"
                 st.caption("➕ Add an AI key in **AI feedback** above to enable the Managing "
                            "Partner note.")
-        if st.button("Save mail settings"):
+        if st.button("Save mail settings", on_click=_keep_open, args=(_ok,)):
             logic.set_mail_auto("foundry", f_auto.startswith("Automatically"))
             logic.set_mail_auto("mp", m_auto.startswith("Automatically"))
             st.success("Mail settings saved.")
@@ -130,12 +149,14 @@ def _mail_settings():
         teams = db.list_teams()
         rnd = db.current_round()
         s1, s2 = st.columns(2)
-        if s1.button(f"📨 Send Foundry notes · Round {rnd}", disabled=not teams):
+        if s1.button(f"📨 Send Foundry notes · Round {rnd}", disabled=not teams,
+                     on_click=_keep_open, args=(_ok,)):
             for t in teams:
                 logic.send_foundry_feedback(t["id"], rnd)
             st.success(f"Foundry venture-review notes sent to {len(teams)} team(s).")
         mp_disabled = not (teams and logic.ai_available())
         if s2.button(f"📨 Send Managing Partner notes · Round {rnd}", disabled=mp_disabled,
+                     on_click=_keep_open, args=(_ok,),
                      help=None if logic.ai_available() else "Configure an AI key first."):
             sent = sum(1 for t in teams if logic.send_managing_partner_note(t["id"], rnd))
             st.success(f"Managing Partner notes sent to {sent} team(s).")
@@ -154,6 +175,160 @@ def _pre_advance_checklist_ui(round_no):
             st.markdown(f"{icon} **{it['label']}** — {it['detail']}")
         if chk["all_ok"]:
             st.success("Everything's handled — good to advance.")
+
+
+# --------------------------------------------------------------------------- #
+# Start here — a first-run control center + setup wizard
+# --------------------------------------------------------------------------- #
+def _goto_page(page):
+    """Navigate the Director console to `page` (used by shortcut buttons)."""
+    st.session_state["instr_page"] = page
+    for k in list(st.session_state.keys()):
+        if k.startswith("nav_"):
+            st.session_state[k] = None
+
+
+def _automation_toggle():
+    """The one-switch 'run it for me' automation bundle for first-timers."""
+    on = logic.recommended_automation_on()
+    extra = " plus the Managing Partner's AI note" if logic.ai_available() else ""
+    st.caption("**Run it for me (recommended for first-timers).** When on, each time you advance "
+               "the round the app automatically **scores every team**, **issues a market event** "
+               "aimed at each team's biggest untested risk, **decides pending pivots** by "
+               f"recommendation, and **emails the Foundry venture review**{extra}. You keep final "
+               "say — override anything on the individual pages.")
+    new = st.toggle("Run it for me — automate scoring, events, pivots & feedback on advance",
+                    value=on, key="auto_bundle")
+    if new != on:
+        logic.set_recommended_automation(new)
+        st.success("Automation enabled — you can mostly just click Advance each week."
+                   if new else "Automation off — you're in full manual control.")
+        st.rerun()
+    st.caption("💡 For fully hands-off advancing, also set date/times per round on "
+               "**Schedule & Timing** — the round then advances on its own.")
+
+
+def _setup_wizard(gid):
+    st.markdown("### 👋 Let's get your game running — four quick steps")
+    st.caption("You only do this once per game. After you add teams, this page becomes your "
+               "week-to-week control center.")
+    game = db.get_game(gid)
+
+    with st.container(border=True):
+        st.markdown("**1 · Name this game**")
+        name = st.text_input("Game name", value=(game["name"] if game else "Game 1"),
+                             key="wiz_name", label_visibility="collapsed")
+        if st.button("Save name", key="wiz_savename"):
+            db.rename_game(gid, name)
+            st.success("Saved.")
+            st.rerun()
+
+    with st.container(border=True):
+        st.markdown("**2 · Add teams** — pick the easier path for you")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("_Have a class roster?_")
+            st.button("📥 Import a roster (.xlsx / .csv)", key="wiz_import",
+                      on_click=_goto_page, args=("Team Setup",),
+                      help="Upload a class contact list; the app builds games and teams for you.")
+        with c2:
+            st.markdown("_Just want teams now?_")
+            n = st.number_input("Number of teams", 1, 40, 5, key="wiz_n")
+            diff = st.selectbox("Difficulty", content.DIFFICULTY_ORDER,
+                                index=content.DIFFICULTY_ORDER.index("Standard"), key="wiz_diff",
+                                help="Sets starting resources; every team is equal.")
+            if st.button("⚡ Create balanced teams", key="wiz_quick", type="primary"):
+                created = logic.quick_setup_teams(int(n), diff)
+                st.success(f"Created {len(created)} balanced teams at {diff} difficulty.")
+                st.rerun()
+
+    with st.container(border=True):
+        st.markdown("**3 · Rounds & schedule**")
+        st.caption(f"Your game currently runs **{logic.total_rounds()} rounds**. Change the "
+                   "count, auto-balance the curriculum, and (optionally) set advance date/times.")
+        st.button("🗓️ Open Schedule & Timing", key="wiz_sched",
+                  on_click=_goto_page, args=("Schedule & Timing",))
+
+    with st.container(border=True):
+        st.markdown("**4 · How much should the app do for you?**")
+        _automation_toggle()
+
+    st.info("➕ **Next:** add teams above. As soon as a team exists, this page turns into your "
+            "control center with the round status, checklist, and one-click Advance.")
+
+
+def director_home():
+    st.subheader("🏠 Start here")
+    gid = db.active_game_id()
+    teams = db.list_teams()
+    if not teams:
+        _setup_wizard(gid)
+        return
+
+    total = logic.total_rounds()
+    cur = db.current_round()
+    game = db.get_game(gid)
+    st.markdown(f"#### {game['name'] if game else 'Your game'} · the week-to-week control center")
+
+    # ---- Status at a glance --------------------------------------------------
+    committed = sum(1 for t in teams
+                    if (db.get_commitment(t["id"], cur) or {}).get("committed"))
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Round", f"{cur} of {total}")
+    m2.metric("Teams", len(teams))
+    m3.metric("Committed this round", f"{committed}/{len(teams)}")
+    m4.metric("Automation", "On" if logic.recommended_automation_on() else "Manual")
+
+    nxt = logic.next_scheduled_advance()
+    if nxt:
+        st.caption(f"⏱️ Next automatic advance: Round {nxt[0]} at {nxt[1]}.")
+
+    # ---- The main action: advance -------------------------------------------
+    st.divider()
+    st.markdown("### ▶️ Advance the cohort")
+    _pre_advance_checklist_ui(cur)
+    if cur < total:
+        ntitles = [t["title"] for t in logic.topics_for_round(cur + 1)]
+        if ntitles:
+            st.caption("Next round covers: **" + " + ".join(ntitles) + "**")
+        if st.button(f"▶️ Advance to Round {cur + 1}", type="primary", key="home_advance",
+                     help="Moves everyone forward, unlocks the next round's tools, and runs any "
+                          "automation you've turned on."):
+            res = logic.director_advance(cur + 1)
+            msg = f"Advanced to Round {res['to']}."
+            mail = res["mail"]
+            if mail["foundry"] or mail["mp"]:
+                msg += f" Auto-sent {mail['foundry']} Foundry + {mail['mp']} Managing Partner note(s)."
+            if res["autopilot"]:
+                msg += " Auto-Director applied."
+            st.success(msg)
+            st.rerun()
+    else:
+        st.success(f"🏁 You're on the final round ({total}). Open Demo Day to run the finale.")
+
+    # ---- Automation ----------------------------------------------------------
+    st.divider()
+    st.markdown("### ⚙️ How much the app does for you")
+    _automation_toggle()
+
+    # ---- Shortcuts -----------------------------------------------------------
+    st.divider()
+    st.markdown("### 🧭 Jump to…")
+    st.caption("Everything else is optional. These are the pages most directors use.")
+    g1, g2, g3 = st.columns(3)
+    g1.button("👥 Teams", key="jt", on_click=_goto_page, args=("Team Setup",),
+              help="Add, edit, or remove teams; preview welcome emails.")
+    g2.button("🗓️ Schedule", key="js", on_click=_goto_page, args=("Schedule & Timing",),
+              help="Rounds, curriculum order, advance times.")
+    g3.button("🎛️ Round Control", key="jr", on_click=_goto_page, args=("Round Control",),
+              help="Advance, mail settings, AI feedback, economy.")
+    g4, g5, g6 = st.columns(3)
+    g4.button("🏁 Score & feedback", key="jsc", on_click=_goto_page, args=("Round Scores",),
+              help="Automated 0–100 grades; send each team its breakdown.")
+    g5.button("📊 Cohort Overview", key="jco", on_click=_goto_page, args=("Cohort Overview",),
+              help="How every team is doing at a glance.")
+    g6.button("🎤 Demo Day", key="jdd", on_click=_goto_page, args=("Demo Day",),
+              help="Open the finale and set the investing rules.")
 
 
 # --------------------------------------------------------------------------- #
@@ -304,15 +479,19 @@ def auto_director():
             # Feedback email — preview & send (deterministic; optional AI comment)
             st.markdown("**Feedback email (venture review)**")
             fb = logic.generate_feedback(t["id"], rnd, sc)
-            with st.expander("Preview / edit"):
-                subj = st.text_input("Subject", value=fb["subject"], key=f"fb_subj_{t['id']}")
-                ai_txt = _ai_comment_button(t["id"], f"auto_{t['id']}", rnd)
+            _fbk = f"fbprev_{t['id']}"
+            with _sticky_expander("Preview / edit", _fbk):
+                subj = st.text_input("Subject", value=fb["subject"], key=f"fb_subj_{t['id']}",
+                                     on_change=_keep_open, args=(_fbk,))
+                ai_txt = _ai_comment_button(t["id"], f"auto_{t['id']}", rnd, keep_open_key=_fbk)
                 default_body = fb["body"]
                 if ai_txt:
                     default_body += f"\n\n✨ Coach's note:\n{ai_txt}"
                 body = st.text_area("Body", value=default_body, height=280,
-                                    key=f"fb_body_{t['id']}_{'ai' if ai_txt else 'plain'}")
-                if st.button("Send to team Inbox", key=f"fb_send_{t['id']}"):
+                                    key=f"fb_body_{t['id']}_{'ai' if ai_txt else 'plain'}",
+                                    on_change=_keep_open, args=(_fbk,))
+                if st.button("Send to team Inbox", key=f"fb_send_{t['id']}",
+                             on_click=_keep_open, args=(_fbk,)):
                     db.add_message(t["id"], subj, body, rnd)
                     st.success("Sent.")
             if st.button("Send suggested feedback", key=f"fb_quick_{t['id']}"):
@@ -561,11 +740,9 @@ def round_control():
         ac1, ac2 = st.columns([2, 3])
         if ac1.button(f"▶️ Advance to Round {cur + 1}", type="primary",
                       help="Moves the whole cohort forward one round and unlocks its tools."):
-            new_r = cur + 1
-            db.set_current_round(new_r)
-            logic.on_round_change(new_r)   # apply learning, reset hours, charge salaries
-            mail = logic.deliver_round_mail(cur)   # auto-send switched-on mail for the closing round
-            msg = f"Advanced to Round {new_r} — its tools are now unlocked for all teams."
+            res = logic.director_advance(cur + 1)
+            msg = f"Advanced to Round {res['to']} — its tools are now unlocked for all teams."
+            mail = res["mail"]
             if mail["foundry"] or mail["mp"]:
                 bits = []
                 if mail["foundry"]:
@@ -573,8 +750,7 @@ def round_control():
                 if mail["mp"]:
                     bits.append(f"{mail['mp']} Managing Partner note(s)")
                 msg += " Auto-sent " + " and ".join(bits) + "."
-            if logic.auto_flag("auto_run_on_advance", default=False):
-                logic.run_autopilot(new_r)
+            if res["autopilot"]:
                 msg += " Auto-Director applied."
             st.success(msg)
             st.rerun()
@@ -595,12 +771,9 @@ def round_control():
             jump = st.number_input("Jump to round", 1, total, min(cur, total),
                                    help="Set any round directly (non-sequential).")
             if st.button("Set round", help="Apply this exact round to the whole cohort."):
-                advanced = int(jump) > cur
-                db.set_current_round(int(jump))
-                logic.on_round_change(int(jump))
+                res = logic.director_advance(int(jump))
                 msg = f"Round set to {jump}."
-                if advanced and logic.auto_flag("auto_run_on_advance", default=False):
-                    logic.run_autopilot(int(jump))
+                if res["autopilot"]:
                     msg += " Auto-Director applied."
                 st.success(msg)
                 st.rerun()
@@ -1128,13 +1301,17 @@ def team_setup():
                        "hints. Preview and tweak the wording before it lands in their Inbox.")
             wsent = any("Welcome" in m["subject"] for m in db.list_messages(t["id"]))
             wel = logic.generate_welcome(t["id"])
-            with st.expander("Preview / edit welcome email"):
-                wsubj = st.text_input("Subject", value=wel["subject"], key=f"wel_subj_{t['id']}")
+            _welk = f"welprev_{t['id']}"
+            with _sticky_expander("Preview / edit welcome email", _welk):
+                wsubj = st.text_input("Subject", value=wel["subject"], key=f"wel_subj_{t['id']}",
+                                      on_change=_keep_open, args=(_welk,))
                 wbody = st.text_area("Body", value=wel["body"], height=340,
-                                     key=f"wel_body_{t['id']}")
+                                     key=f"wel_body_{t['id']}",
+                                     on_change=_keep_open, args=(_welk,))
                 st.caption("Preview:")
                 st.markdown(wbody)
-                if st.button("Send this welcome to the team Inbox", key=f"wel_send_{t['id']}"):
+                if st.button("Send this welcome to the team Inbox", key=f"wel_send_{t['id']}",
+                             on_click=_keep_open, args=(_welk,)):
                     db.add_message(t["id"], wsubj, wbody, 1)
                     st.success("Welcome email sent.")
                     st.rerun()
@@ -1151,6 +1328,8 @@ def team_setup():
 # --------------------------------------------------------------------------- #
 def resources():
     st.subheader("💰 Grant / Deduct Resources")
+    st.caption("🔧 Optional / manual — only needed if you want to hand out or claw back capital, "
+               "credits, or hours. The simulation runs fine without ever using this page.")
     _guide(
         "Hand out or take back resources here — an investor round adds capital, a funding "
         "request adds credits, a penalty removes them. Enter positive numbers to give and "
@@ -1205,6 +1384,8 @@ def resources():
 # --------------------------------------------------------------------------- #
 def events():
     st.subheader("📡 Issue Market Events")
+    st.caption("🔧 Optional / manual — the Auto-Director issues these for you when automation is "
+               "on. Use this page only to hand-pick or broadcast an event yourself.")
     _guide(
         "Market events are the twists you inject each round — a competitor move, a rule change, "
         "a cost shock. Every built-in event names the assumption it targets, so you can steer "
@@ -1273,6 +1454,8 @@ def events():
 # --------------------------------------------------------------------------- #
 def pivot_committee():
     st.subheader("⚖️ Pivot Committee")
+    st.caption("🔧 Optional / manual — the Auto-Director can decide pivot petitions by "
+               "recommendation. Use this page only to review or override those decisions yourself.")
     _guide(
         "Teams can't just declare a pivot — they file a petition and you rule on it. Your job "
         "is to check that the change is driven by evidence, not by frustration. Read each "
@@ -1334,6 +1517,8 @@ def pivot_committee():
 # --------------------------------------------------------------------------- #
 def scoring():
     st.subheader("📊 Set Dashboard Scores")
+    st.caption("🔧 Optional / manual — for hand-setting the ten dimension scores. Most directors "
+               "use the automated **Round Scores** page instead and never open this one.")
     _guide(
         "Grade each team on ten performance dimensions, 0–100, once per round. These scores "
         "drive the student dashboard and — for three of them — the venture valuation. Hover any "
@@ -1529,15 +1714,19 @@ def round_scores():
     m2.metric("Committed?", "Yes" if rs["committed"] else "No")
     m3.metric("Risk penalty", f"-{rs['penalty']:.0f}")
     email = _round_score_email(team, rnd, rs)
-    with st.expander("Preview / edit score email"):
-        subj = st.text_input("Subject", value=email["subject"], key=f"rs_subj_{team['id']}")
-        ai_txt = _ai_comment_button(team["id"], f"rs_{team['id']}", rnd)
+    _rsk = f"scoreprev_{team['id']}"
+    with _sticky_expander("Preview / edit score email", _rsk):
+        subj = st.text_input("Subject", value=email["subject"], key=f"rs_subj_{team['id']}",
+                             on_change=_keep_open, args=(_rsk,))
+        ai_txt = _ai_comment_button(team["id"], f"rs_{team['id']}", rnd, keep_open_key=_rsk)
         default_body = email["body"]
         if ai_txt:
             default_body += f"\n\n✨ Coach's note:\n{ai_txt}"
         body = st.text_area("Body", value=default_body, height=280,
-                            key=f"rs_body_{team['id']}_{'ai' if ai_txt else 'plain'}")
-        if st.button("Send to team Inbox", key=f"rs_send_{team['id']}"):
+                            key=f"rs_body_{team['id']}_{'ai' if ai_txt else 'plain'}",
+                            on_change=_keep_open, args=(_rsk,))
+        if st.button("Send to team Inbox", key=f"rs_send_{team['id']}",
+                     on_click=_keep_open, args=(_rsk,)):
             db.add_message(team["id"], subj, body, rnd)
             st.success("Sent.")
     if st.button("Send suggested score to all teams", key="rs_send_all"):
@@ -1552,6 +1741,8 @@ def round_scores():
 # --------------------------------------------------------------------------- #
 def vp_auction():
     st.subheader("💠 VP Auction Oversight")
+    st.caption("🔧 Optional / manual — quality-control for teams' self-reported evidence support. "
+               "Safe to skip unless you want to override a team's proposition values.")
     _guide(
         "In the Value Proposition Auction, teams bet Venture Tokens on their competing ideas "
         "and the app automatically taxes overconfidence and rewards evidence-based redirection. "

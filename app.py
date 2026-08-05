@@ -291,7 +291,9 @@ def student_shell():
 # --------------------------------------------------------------------------- #
 # Instructor shell
 # --------------------------------------------------------------------------- #
+INSTRUCTOR_HOME = "🏠 Start here"
 INSTRUCTOR_PAGES = {
+    INSTRUCTOR_HOME: vi.director_home,
     "Games": vi.games_console,
     "Cohort Overview": vi.overview,
     "Auto-Director": vi.auto_director,
@@ -307,6 +309,46 @@ INSTRUCTOR_PAGES = {
     "Misconception Radar": vi.misconception_radar,
     "Demo Day": vi.demo_day_admin,
 }
+
+# Grouped navigation so a first-time director isn't faced with 14 flat pages.
+INSTRUCTOR_NAV_GROUPS = {
+    "⚙️ Set up (once)": ["Games", "Team Setup", "Schedule & Timing"],
+    "▶️ Run each round": ["Round Control", "Round Scores", "Auto-Director"],
+    "📊 See how it's going": ["Cohort Overview", "Misconception Radar", "Demo Day"],
+}
+INSTRUCTOR_NAV_ADVANCED = ["Resources", "Market Events", "VP Auction",
+                           "Pivot Committee", "Dashboard Scoring"]
+_INSTRUCTOR_NAV_KEYS = (["nav_home"]
+                        + [f"nav_{g}" for g in INSTRUCTOR_NAV_GROUPS]
+                        + ["nav_adv"])
+
+
+def _instructor_nav():
+    """Render the grouped Director sidebar nav; returns the selected page name."""
+    home = INSTRUCTOR_HOME
+    cur = st.session_state.get("instr_page", home)
+
+    def _pick(k):
+        v = st.session_state.get(k)
+        if v:
+            st.session_state["instr_page"] = v
+            for kk in _INSTRUCTOR_NAV_KEYS:
+                if kk != k:
+                    st.session_state.pop(kk, None)
+
+    st.radio("Home", [home], index=(0 if cur == home else None), key="nav_home",
+             label_visibility="collapsed", on_change=_pick, args=("nav_home",))
+    for title, pages in INSTRUCTOR_NAV_GROUPS.items():
+        st.caption(title)
+        idx = pages.index(cur) if cur in pages else None
+        st.radio(title, pages, index=idx, key=f"nav_{title}",
+                 label_visibility="collapsed", on_change=_pick, args=(f"nav_{title}",))
+    with st.expander("🔧 Advanced / manual (optional)", expanded=cur in INSTRUCTOR_NAV_ADVANCED):
+        st.caption("Only needed if you run these steps by hand — automation covers them.")
+        idx = INSTRUCTOR_NAV_ADVANCED.index(cur) if cur in INSTRUCTOR_NAV_ADVANCED else None
+        st.radio("Advanced", INSTRUCTOR_NAV_ADVANCED, index=idx, key="nav_adv",
+                 label_visibility="collapsed", on_change=_pick, args=("nav_adv",))
+    return st.session_state.get("instr_page", home)
 
 
 def instructor_shell():
@@ -332,7 +374,9 @@ def instructor_shell():
         diff = db.get_setting("difficulty", "not set")
         st.caption(f"Round {db.current_round()} of {logic.total_rounds()} · "
                    f"{len(db.list_teams())} team(s) · Difficulty: {diff}")
-        page = st.radio("Console", list(INSTRUCTOR_PAGES.keys()))
+        st.divider()
+        page = _instructor_nav()
+        st.divider()
         with st.expander("Director's questions"):
             for q in [
                 "What must be true for this to work?",
