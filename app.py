@@ -318,37 +318,34 @@ INSTRUCTOR_NAV_GROUPS = {
 }
 INSTRUCTOR_NAV_ADVANCED = ["Resources", "Market Events", "VP Auction",
                            "Pivot Committee", "Dashboard Scoring"]
-_INSTRUCTOR_NAV_KEYS = (["nav_home"]
-                        + [f"nav_{g}" for g in INSTRUCTOR_NAV_GROUPS]
-                        + ["nav_adv"])
+
+
+def _set_instr_page(page):
+    st.session_state["instr_page"] = page
 
 
 def _instructor_nav():
-    """Render the grouped Director sidebar nav; returns the selected page name."""
+    """Grouped Director sidebar nav built from buttons — exactly one page is ever
+    highlighted (the active one is a primary button), which avoids the multi-radio
+    'two selections at once' problem. Returns the selected page name."""
     home = INSTRUCTOR_HOME
     cur = st.session_state.get("instr_page", home)
 
-    def _pick(k):
-        v = st.session_state.get(k)
-        if v:
-            st.session_state["instr_page"] = v
-            for kk in _INSTRUCTOR_NAV_KEYS:
-                if kk != k:
-                    st.session_state.pop(kk, None)
+    def _navbtn(page, label=None):
+        st.button(label or page, key=f"navbtn_{page}", use_container_width=True,
+                  type=("primary" if page == cur else "secondary"),
+                  on_click=_set_instr_page, args=(page,))
 
-    st.radio("Home", [home], index=(0 if cur == home else None), key="nav_home",
-             label_visibility="collapsed", on_change=_pick, args=("nav_home",))
+    _navbtn(home, "🏠 Start here")
     for title, pages in INSTRUCTOR_NAV_GROUPS.items():
         st.caption(title)
-        idx = pages.index(cur) if cur in pages else None
-        st.radio(title, pages, index=idx, key=f"nav_{title}",
-                 label_visibility="collapsed", on_change=_pick, args=(f"nav_{title}",))
+        for p in pages:
+            _navbtn(p)
     with st.expander("🔧 Advanced / manual (optional)", expanded=cur in INSTRUCTOR_NAV_ADVANCED):
         st.caption("Only needed if you run these steps by hand — automation covers them.")
-        idx = INSTRUCTOR_NAV_ADVANCED.index(cur) if cur in INSTRUCTOR_NAV_ADVANCED else None
-        st.radio("Advanced", INSTRUCTOR_NAV_ADVANCED, index=idx, key="nav_adv",
-                 label_visibility="collapsed", on_change=_pick, args=("nav_adv",))
-    return st.session_state.get("instr_page", home)
+        for p in INSTRUCTOR_NAV_ADVANCED:
+            _navbtn(p)
+    return cur
 
 
 def instructor_shell():

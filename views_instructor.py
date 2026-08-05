@@ -183,9 +183,6 @@ def _pre_advance_checklist_ui(round_no):
 def _goto_page(page):
     """Navigate the Director console to `page` (used by shortcut buttons)."""
     st.session_state["instr_page"] = page
-    for k in list(st.session_state.keys()):
-        if k.startswith("nav_"):
-            st.session_state[k] = None
 
 
 def _automation_toggle():
