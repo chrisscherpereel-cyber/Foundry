@@ -1540,6 +1540,51 @@ def log_mini_pivot(team_id, original, evidence, change, pivot_type=""):
     return MINI_PIVOT_CREDIT
 
 
+# --------------------------------------------------------------------------- #
+# Effectuation mechanics — put Sarasvathy's principles into the game:
+#   • affordable loss  — frame spend against the "loss you can afford" (the card)
+#   • crazy quilt      — self-selected partners who pre-commit unlock a reward
+#   • lemonade         — turn a market-event surprise into an opportunity
+# --------------------------------------------------------------------------- #
+PARTNER_CREDIT = 4      # a real pre-commitment is a strong effectual signal
+LEMONADE_CREDIT = 2     # reframing a setback as opportunity earns learning
+
+
+def affordable_loss_status(team):
+    """The team's 'affordable loss' framing: the loss they set out able to absorb
+    (the founder card's budget) vs. the capital they still hold."""
+    card = db.get_founder_card(team["id"]) or {}
+    cap = float(card.get("budget") or 0)
+    remaining = float(team.get("capital") or 0)
+    spent = max(0.0, cap - remaining)
+    return {"cap": cap, "remaining": remaining, "spent": spent,
+            "within": remaining >= 0}
+
+
+def log_partner_commitment(team_id, name, commitment, evidence):
+    """Record a self-selected partner who has pre-committed (crazy quilt) and reward
+    the learning. Returns the Evidence-Credit reward."""
+    db.add_partner(team_id, name, commitment, evidence, round_no=db.current_round())
+    db.adjust_resources(team_id, credits=PARTNER_CREDIT, kind="learning",
+                        description=f"Partner pre-commitment secured: {name}",
+                        allow_negative=True)
+    return PARTNER_CREDIT
+
+
+def exploit_event(team_id, event_id, text):
+    """Log how a team turns a market event into an opportunity (lemonade). Rewards
+    once per event. Returns the reward (0 if already rewarded)."""
+    ev = db.get_event(event_id)
+    already = bool(ev and (ev.get("exploit") or "").strip())
+    db.set_event_exploit(event_id, text)
+    if not already:
+        db.adjust_resources(team_id, credits=LEMONADE_CREDIT, kind="learning",
+                            description="Turned a market event into opportunity (lemonade)",
+                            allow_negative=True)
+        return LEMONADE_CREDIT
+    return 0
+
+
 def evidence_based_pivots(team_id):
     """How much the team has changed its mind based on evidence."""
     pivots = db.list_pivots(team_id)

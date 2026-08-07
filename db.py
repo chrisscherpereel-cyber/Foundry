@@ -369,6 +369,18 @@ def init_db():
         _ensure_column(conn, "experiments", "learned", "TEXT")     # the insight
         _ensure_column(conn, "experiments", "decision", "TEXT")    # persevere / pivot / stop / next
         _ensure_column(conn, "experiments", "signal", "TEXT")      # evidence signal (commitment ladder)
+        # Effectuation — "lemonade": how a team turns a market event into opportunity.
+        _ensure_column(conn, "events", "exploit", "TEXT")
+        # Effectuation — "crazy quilt": self-selected partners who pre-commit.
+        conn.execute("""CREATE TABLE IF NOT EXISTS partners (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            team_id     INTEGER NOT NULL,
+            name        TEXT,
+            commitment  TEXT,
+            evidence    TEXT,
+            round       INTEGER,
+            created_at  TEXT,
+            FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE)""")
         # AI logs: faster structured capture + link an AI claim to a real test so it
         # can auto-verify when that test resolves.
         _ensure_column(conn, "ai_logs", "claim_type", "TEXT")     # fact | prediction | opinion
@@ -980,6 +992,48 @@ def resolve_event(event_id, resolved=1):
     try:
         conn.execute("UPDATE events SET resolved=? WHERE id=?", (resolved, event_id))
         conn.commit()
+    finally:
+        conn.close()
+
+
+def set_event_exploit(event_id, text):
+    conn = get_conn()
+    try:
+        conn.execute("UPDATE events SET exploit=?, resolved=1 WHERE id=?", (text, event_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_event(event_id):
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT * FROM events WHERE id=?", (event_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# Partners / pre-commitments (effectuation — crazy quilt)
+# --------------------------------------------------------------------------- #
+def add_partner(team_id, name, commitment, evidence, round_no=None):
+    conn = get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO partners(team_id, name, commitment, evidence, round, created_at) "
+            "VALUES(?,?,?,?,?,?)", (team_id, name, commitment, evidence, round_no, now()))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_partners(team_id):
+    conn = get_conn()
+    try:
+        rows = conn.execute("SELECT * FROM partners WHERE team_id=? ORDER BY id DESC",
+                            (team_id,)).fetchall()
+        return [dict(r) for r in rows]
     finally:
         conn.close()
 

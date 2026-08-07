@@ -479,6 +479,29 @@ CUSTOMER_PROFILE_BLOCKS = [
     ("gains", "Gains", "Benefits and outcomes the customer wants"),
 ]
 
+# --------------------------------------------------------------------------- #
+# Jobs to Be Done (Christensen) — a structured job-statement builder so students
+# write a real "job", not a feature. A job has three dimensions and a form:
+#   "When [situation], I want to [motivation], so I can [expected outcome]."
+# --------------------------------------------------------------------------- #
+JTBD_DIMENSIONS = [
+    ("Functional", "The practical task to accomplish (e.g., get a healthy dinner on the table fast)."),
+    ("Social", "How they want to be perceived by others (e.g., look like a capable host)."),
+    ("Emotional", "How they want to feel (e.g., calm instead of stressed at 6pm)."),
+]
+JTBD_DIMENSION_NAMES = [d[0] for d in JTBD_DIMENSIONS]
+
+
+def compose_job_statement(situation, motivation, outcome, dims=None):
+    """Build a JTBD statement from its parts (blank parts are gently placeholdered)."""
+    situation = (situation or "…").strip()
+    motivation = (motivation or "…").strip()
+    outcome = (outcome or "…").strip()
+    line = f"When {situation}, I want to {motivation}, so I can {outcome}."
+    if dims:
+        line += "  [" + ", ".join(dims) + "]"
+    return line
+
 VPC_BLOCKS = [
     ("products_services", "Products & Services", "What you offer"),
     ("pain_relievers", "Pain Relievers", "How your offer eases specific customer pains"),
@@ -678,6 +701,35 @@ EXPERIMENT_CARDS = [
      "suits": "Adaptability", "bias": "Channel saturation", "sample": "2+ channels"},
 ]
 EXPERIMENT_CARD_MAP = {c["name"]: c for c in EXPERIMENT_CARDS}
+
+# Testing Business Ideas (Bland & Osterwalder) organizes experiments into two
+# phases: DISCOVERY (cheap, fast, weaker signal — explore what's true) and
+# VALIDATION (costlier, stronger evidence — confirm with real commitment).
+EXPERIMENT_PHASE = {
+    "Customer interview": "Discovery", "Observation": "Discovery",
+    "Expert interview": "Discovery", "Search trend analysis": "Discovery",
+    "Clickable prototype": "Discovery", "Paper prototype": "Discovery",
+    "Landing-page test": "Discovery", "Advertisement test": "Discovery",
+    "Email-response test": "Discovery", "Partner interview": "Discovery",
+    "Cost quotation": "Discovery", "Technical feasibility test": "Discovery",
+    "Concierge experiment": "Validation", "Wizard-of-Oz experiment": "Validation",
+    "Preorder": "Validation", "Letter of intent": "Validation",
+    "Price-sensitivity test": "Validation", "Sales conversation": "Validation",
+    "Channel test": "Validation",
+}
+
+
+def experiment_phase(name):
+    return EXPERIMENT_PHASE.get(name, "Discovery")
+
+
+def strength_label(strength):
+    """Plain-language band for an evidence-strength score (TBI 'strength of evidence')."""
+    if strength >= 8:
+        return "Strong"
+    if strength >= 5:
+        return "Moderate"
+    return "Weak"
 
 # --------------------------------------------------------------------------- #
 # Market events by category. Each event exposes an embedded assumption.

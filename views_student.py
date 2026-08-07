@@ -1568,6 +1568,49 @@ def _venture_name_section(team, editable):
                 st.caption("Re-save to include an AI brand critique.")
 
 
+def _effectuation_panel(team, editable):
+    """Effectuation mechanics — affordable loss + crazy-quilt partner pre-commitments."""
+    st.write("### 🧭 Effectuation — play from your means")
+    st.caption("Expert founders reason from what they can afford to lose and who will commit to "
+               "them — then treat surprises as raw material. Two of those levers live here.")
+    al = logic.affordable_loss_status(team)
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Affordable loss (your card)", f"${al['cap']:,.0f}",
+              help="The budget you set out able to lose — your risk ceiling. Spend against THIS, "
+                   "not against a hoped-for return.")
+    m2.metric("Capital remaining", f"${al['remaining']:,.0f}")
+    m3.metric("Spent so far", f"${al['spent']:,.0f}")
+    if al["cap"] and al["spent"] > al["cap"] * 0.8:
+        st.warning("You're near your affordable-loss ceiling — favour cheaper tests from here.")
+
+    st.markdown("**🧩 Partners & pre-commitments (crazy quilt)**")
+    st.caption(f"Log a self-selected partner or customer who has actually pre-committed — a "
+               f"stocking agreement, an intro, a letter of intent. Each earns "
+               f"+{logic.PARTNER_CREDIT} Evidence Credits; real commitments are strong signals.")
+    if editable and not logic.editing_locked(team["id"]):
+        with st.form("partner_form", clear_on_submit=True):
+            pc = st.columns([2, 3, 3])
+            name = pc[0].text_input("Partner / customer")
+            commit = pc[1].text_input("What did they pre-commit to?")
+            evid = pc[2].text_input("Evidence (email, signature, intro…)")
+            if st.form_submit_button("➕ Log pre-commitment"):
+                if name.strip() and commit.strip():
+                    r = logic.log_partner_commitment(team["id"], name, commit, evid)
+                    st.success(f"Logged. +{r} Evidence Credits for a real commitment.")
+                    st.rerun()
+                else:
+                    st.error("Add at least the partner and what they committed to.")
+    partners = db.list_partners(team["id"])
+    if partners:
+        for pp in partners:
+            line = f"- **{pp['name']}** — {pp['commitment']}"
+            if (pp.get("evidence") or "").strip():
+                line += f"  ·  _{pp['evidence']}_"
+            st.markdown(line)
+    else:
+        st.caption("No pre-commitments logged yet.")
+
+
 def founder_opportunity(team):
     st.subheader("🧭 Founder & Opportunity Formation")
     _why("Founder & Opportunity")
@@ -1638,6 +1681,9 @@ def founder_opportunity(team):
 
     st.divider()
     _venture_name_section(team, editable)
+
+    st.divider()
+    _effectuation_panel(team, editable)
 
     st.divider()
     if db.has_ack(team["id"], "founder_review"):
@@ -1775,6 +1821,34 @@ def _cbox(parent, title, key, prefill, height=120, hint=""):
         box.caption(hint)
     return box.text_area(title, value=prefill, key=key, height=height,
                          label_visibility="collapsed")
+
+
+def _jtbd_builder(team, ctype, val):
+    """Jobs-to-Be-Done job-statement builder — compose a real 'job' (situation →
+    motivation → outcome, with functional/social/emotional dimensions) and drop it
+    into the Customer Jobs box. Kept in a bordered container (not an expander) so it
+    doesn't collapse while you type."""
+    key = f"{ctype}_customer_jobs"
+    with st.container(border=True):
+        st.markdown("**🧩 Job-statement builder — Jobs to Be Done**")
+        st.caption("A strong customer job isn't a feature — it's what the customer is trying to get "
+                   "done. Fill the three parts, tag the dimensions, then add it to Customer Jobs.")
+        c1, c2, c3 = st.columns(3)
+        situation = c1.text_input("When… (situation / trigger)", key="jtbd_sit",
+                                  placeholder="it's 6pm on a weeknight")
+        motivation = c2.text_input("I want to… (motivation)", key="jtbd_mot",
+                                   placeholder="get a healthy dinner ready fast")
+        outcome = c3.text_input("so I can… (outcome)", key="jtbd_out",
+                                placeholder="feel calm, not stressed")
+        dims = st.multiselect("Job dimensions", content.JTBD_DIMENSION_NAMES, key="jtbd_dims",
+                              help="Most jobs have a functional core plus social and/or emotional sides.")
+        preview = content.compose_job_statement(situation, motivation, outcome, dims)
+        st.markdown(f"📝 **Preview:** {preview}")
+        if st.button("➕ Add to Customer Jobs", key="jtbd_add", type="primary"):
+            cur_txt = st.session_state.get(key, val("customer_jobs")) or ""
+            st.session_state[key] = (cur_txt + ("\n" if cur_txt.strip() else "") + preview)
+            st.rerun()
+        st.caption("Dimensions — " + "  ·  ".join(f"**{n}**: {d}" for n, d in content.JTBD_DIMENSIONS))
 
 
 def _customer_profile_layout(ctype, val):
@@ -1957,6 +2031,9 @@ def canvases(team):
                 "early; fill them from real evidence.</span>", unsafe_allow_html=True)
     if existing:
         st.caption(f"{len(existing)} version(s) saved. Editing starts from the latest.")
+
+    if canvas_ok and ctype == "customer_profile":
+        _jtbd_builder(team, ctype, val)
 
     if canvas_ok:
         _ai_ack_popover(team, f"Canvas: {title}", f"canvas_ai_{ctype}", label=_AI_LOG_LABEL)
@@ -2147,8 +2224,17 @@ def experiments(team):
     ic3.metric("Credits", f"{card['credits']}", help="Evidence Credits this experiment costs.")
     ic4.metric("Evidence strength", f"{card['strength']}/10",
                help="How strong the resulting evidence is if the test is done well.")
-    st.caption(f"Best for **{card['suits']}** assumptions · Min sample: {card['sample']} · "
-               f"Watch for bias: {card['bias']}")
+    _phase = content.experiment_phase(card_name)
+    _phicon = "🔎" if _phase == "Discovery" else "✅"
+    st.markdown(f"{_phicon} **{_phase}** experiment  ·  **{content.strength_label(card['strength'])}** "
+                f"evidence  ·  best for **{card['suits']}** assumptions")
+    st.caption(f"Min sample: {card['sample']} · Watch for bias: {card['bias']}")
+    with st.expander("🔬 Discovery vs. Validation (Testing Business Ideas)"):
+        st.caption("**Discovery** tests are cheap and fast — they explore whether a problem/solution "
+                   "is real (interviews, observation, prototypes, landing pages). **Validation** tests "
+                   "cost more but give stronger evidence by asking for real commitment (pre-orders, "
+                   "letters of intent, concierge, sales). Rule of thumb: **test cheap first, then "
+                   "escalate** to a stronger test once discovery looks promising.")
 
     if editable:
       _ai_ack_popover(team, "Experiment Marketplace", "exp_ai", label=_AI_LOG_LABEL)
@@ -2242,7 +2328,8 @@ def experiments(team):
     if not exps:
         st.caption("No experiments yet.")
     for e in exps:
-        with st.expander(f"[{e['outcome']}] {e['card_type']} — {e['hypothesis'][:60]}"):
+        with st.expander(f"[{e['outcome']}] {content.experiment_phase(e['card_type'])} · "
+                         f"{e['card_type']} — {e['hypothesis'][:55]}"):
             st.write(f"**Metric:** {e['metric']}")
             st.write(f"**Success threshold:** {e['success_threshold']}")
             st.write(f"**Failure threshold:** {e['failure_threshold']}")
@@ -2620,11 +2707,13 @@ def market_events(team):
         "Each round the Director introduces a market event — a competitor move, a rule change, "
         "a cost shock. These aren't random punishments: each one targets an assumption hidden "
         "in your canvas. Read the event, find which of your assumptions it threatens, and "
-        "respond by testing, adjusting your model, or filing a pivot. Nothing to enter here — "
-        "this page is your inbox.",
+        "respond by testing, adjusting your model, or filing a pivot. Then try the **lemonade** "
+        "move: turn the surprise into an opportunity.",
         terms=[
             ("Assumption exposed", "The belief this event puts pressure on. Go check whether "
              "you have evidence for it."),
+            ("Lemonade", "An effectuation principle: leverage surprises and setbacks instead of "
+             "just defending against them."),
             ("Broadcast", "An event sent to all teams at once."),
         ],
     )
@@ -2632,6 +2721,7 @@ def market_events(team):
     if not evs:
         st.info("No market events yet. The Director issues these starting around week 7.")
         return
+    locked = logic.editing_locked(team["id"])
     for e in evs:
         scope = "All teams" if e["team_id"] is None else "Your team"
         icon = "✅" if e["resolved"] else "🔔"
@@ -2640,6 +2730,18 @@ def market_events(team):
             st.markdown(f"**{intro}** {e['text']}{tail}")
             if e["exposes"]:
                 st.caption(f"🎯 Assumption exposed: {e['exposes']} — check your evidence for it.")
+            if (e.get("exploit") or "").strip():
+                st.success(f"🍋 Your opportunity play: {e['exploit']}")
+            if not locked:
+                with st.form(f"exploit_{e['id']}", clear_on_submit=False):
+                    txt = st.text_input(
+                        "🍋 Turn this into an opportunity (lemonade)", value=e.get("exploit") or "",
+                        help=f"How could this surprise become an advantage? First save earns "
+                             f"+{logic.LEMONADE_CREDIT} Evidence Credits.")
+                    if st.form_submit_button("Save opportunity play") and txt.strip():
+                        r = logic.exploit_event(team["id"], e["id"], txt)
+                        st.success("Saved." + (f" +{r} Evidence Credits." if r else ""))
+                        st.rerun()
 
 
 # --------------------------------------------------------------------------- #
