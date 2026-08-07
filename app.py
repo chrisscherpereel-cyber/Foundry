@@ -130,12 +130,12 @@ def landing():
 # --------------------------------------------------------------------------- #
 # Student shell
 # --------------------------------------------------------------------------- #
+STUDENT_HOME = "Round Briefing"
 STUDENT_PAGES = {
     "Round Briefing": vs.round_briefing,
     "Inbox": vs.inbox,
-    "Dashboard": vs.dashboard,
-    "Progress": vs.progress,
-    "Leaderboard": vs.leaderboard,
+    "Concept Check": vs.concept_check,
+    "Decision Journal": vs.reflections,
     "Founder & Opportunity": vs.founder_opportunity,
     "Founder & Team": vs.founder_skills,
     "Canvases": vs.canvases,
@@ -145,11 +145,94 @@ STUDENT_PAGES = {
     "Evidence Ledger": vs.evidence,
     "Market Events": vs.market_events,
     "Pivot Petition": vs.pivots,
-    "Concept Check": vs.concept_check,
-    "AI Assist Log": vs.ai_assist,
-    "Decision Journal": vs.reflections,
+    "My Venture": vs.my_venture,
+    "Leaderboard": vs.leaderboard,
     "Demo Day": vs.demo_day,
+    "AI Assist Log": vs.ai_assist,
 }
+# Old page names kept as aliases so any deep-link/next-action target still resolves.
+STUDENT_PAGE_ALIASES = {"Dashboard": "My Venture", "Progress": "My Venture"}
+
+# Grouped, round-aware navigation so students see what's actionable now, not a wall
+# of 18 pages. Locked tools are hidden into an "Opens later" list.
+STUDENT_NAV_GROUPS = {
+    "📅 This week": ["Round Briefing", "Inbox", "Concept Check", "Decision Journal"],
+    "🏗️ Build your venture": ["Founder & Opportunity", "Founder & Team", "Canvases",
+                              "VP Auction", "Assumption Map", "Experiment Marketplace",
+                              "Evidence Ledger", "Market Events", "Pivot Petition"],
+    "📈 Track & finish": ["My Venture", "Leaderboard", "Demo Day"],
+}
+STUDENT_NAV_UTILITY = ["AI Assist Log"]
+
+
+def _set_student_page(page):
+    st.session_state["student_page"] = STUDENT_PAGE_ALIASES.get(page, page)
+
+
+def _student_nav(team):
+    """Grouped button nav. Shows only tools available this round; locked tools go to an
+    'Opens later' expander. Exactly one page is highlighted (a primary button)."""
+    rnd = db.current_round()
+    cur = st.session_state.get("student_page", STUDENT_HOME)
+    cur = STUDENT_PAGE_ALIASES.get(cur, cur)
+    if cur not in STUDENT_PAGES:
+        cur = STUDENT_HOME
+    unread = db.unread_count(team["id"])
+    committed = logic.commitment_state(team["id"], rnd)["committed"]
+
+    def _label(page):
+        if page == "Round Briefing":
+            return "🏠 This week " + ("✅" if committed else "⚠️")
+        if page == "Inbox":
+            return f"Inbox 🔵{unread}" if unread else "Inbox"
+        return page
+
+    def _btn(page):
+        st.button(_label(page), key=f"snav_{page}", use_container_width=True,
+                  type=("primary" if page == cur else "secondary"),
+                  on_click=_set_student_page, args=(page,))
+
+    locked = []
+    for title, pages in STUDENT_NAV_GROUPS.items():
+        shown = []
+        for p in pages:
+            if logic.tool_state(p, rnd, team["id"]) == "locked":
+                locked.append(p)
+            else:
+                shown.append(p)
+        if not shown:
+            continue
+        st.caption(title)
+        for p in shown:
+            _btn(p)
+    st.caption("🔧 Tools")
+    for p in STUDENT_NAV_UTILITY:
+        _btn(p)
+    if locked:
+        with st.expander(f"🔒 Opens later ({len(locked)})"):
+            st.caption("These tools unlock as the simulation advances — nothing to do here yet.")
+            for p in sorted(locked, key=lambda x: logic.page_unlock_round(x)):
+                st.markdown(f"🔒 **{p}** · opens Round {logic.page_unlock_round(p)}")
+    return cur
+
+
+def _next_action_strip(team, page):
+    """A thin 'you are here / do this next' strip at the top of each tool page, so the
+    student's next move travels with them instead of living only in the sidebar."""
+    if page in ("Round Briefing", "My Venture", "Leaderboard", "Demo Day"):
+        return   # these pages already carry their own guidance
+    rnd = db.current_round()
+    nxt = logic.next_action(team["id"], rnd)
+    c1, c2 = st.columns([5, 2])
+    if nxt and nxt.get("label"):
+        c1.caption(f"📍 Round {rnd}  ·  👉 **Next:** {nxt['label']}"
+                   + (f" → {nxt['tool']}" if nxt.get("tool") else ""))
+        target = STUDENT_PAGE_ALIASES.get(nxt.get("tool"), nxt.get("tool"))
+        if target and target in STUDENT_PAGES and target != page:
+            c2.button("Go to next ▸", key="nextstrip_go",
+                      on_click=_set_student_page, args=(target,))
+    else:
+        c1.caption(f"📍 Round {rnd}  ·  ✅ You're caught up this round.")
 
 
 def _make_student_label(team):
@@ -198,6 +281,10 @@ def _sidebar_todo(team):
     if nxt:
         where = f" → {nxt['tool']}" if nxt.get("tool") else ""
         st.caption(f"👉 **Next:** {nxt['label']}{where}")
+        target = STUDENT_PAGE_ALIASES.get(nxt.get("tool"), nxt.get("tool"))
+        if target and target in STUDENT_PAGES:
+            st.button(f"Go to {target} ▸", key="todo_next_go", use_container_width=True,
+                      on_click=_set_student_page, args=(target,))
     open_items = [i for i in items if not i["done"]]
     if open_items:
         with st.expander(f"📝 {len(open_items)} still to do"):
@@ -275,16 +362,15 @@ def student_shell():
         st.metric("Credits", f"{team['evidence_credits']:.1f}")
         _sidebar_todo(team)
         _sidebar_commit_status(team)
-        page = st.radio("Go to", list(STUDENT_PAGES.keys()),
-                        format_func=_make_student_label(team))
-        st.caption("🔒 locked (opens later) · 👁️ reference-only this round · others are active. "
-                   "Round Briefing ✅ = committed, ⚠️ = not yet.")
+        st.divider()
+        page = _student_nav(team)
         with st.expander("Rotating team roles"):
             for role, desc in content.TEAM_ROLES:
                 st.caption(f"**{role}** — {desc}")
         st.button("Log out", on_click=logout)
 
     _scroll_top_on_change("_student_page", page)
+    _next_action_strip(team, page)
     STUDENT_PAGES[page](team)
 
 

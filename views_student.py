@@ -1140,6 +1140,17 @@ def _team_identity_editor(team):
             st.rerun()
 
 
+def my_venture(team):
+    """Combined 'My Venture' page — the dashboard and the progress/trophy views under
+    two tabs, so the sidebar isn't split across two overlapping status pages."""
+    st.subheader("📊 My Venture")
+    t1, t2 = st.tabs(["Dashboard", "Progress & badges"])
+    with t1:
+        dashboard(team)
+    with t2:
+        progress(team)
+
+
 def dashboard(team):
     ident = logic.team_identity(team)
     st.markdown(branding.team_badge_html(team, 52) + " <span style='opacity:.6'>— Venture "
