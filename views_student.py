@@ -436,11 +436,16 @@ def _mini_pivot_section(team):
                 change = st.text_input(
                     "What will you change?",
                     placeholder="Switch the offer from weekly kits to grab-and-go single meals.")
+                mptype = st.selectbox(
+                    "Type of pivot (Lean Startup)", content.PIVOT_TYPE_NAMES,
+                    index=content.PIVOT_TYPE_NAMES.index("Not sure yet"),
+                    format_func=lambda n: f"{n} — {content.PIVOT_TYPE_BY_NAME[n]}",
+                    help="Naming what kind of change this is keeps the correction deliberate.")
                 if st.form_submit_button("Log course correction"):
                     if not (original.strip() and change.strip()):
                         st.error("Tell us what was wrong and what you'll change.")
                     else:
-                        reward = logic.log_mini_pivot(team["id"], original, evidence, change)
+                        reward = logic.log_mini_pivot(team["id"], original, evidence, change, mptype)
                         st.success(f"Course correction logged. +{reward} Evidence Credits for "
                                    "learning from evidence.")
                         st.rerun()
@@ -1372,6 +1377,57 @@ def leaderboard(team):
             st.markdown(line)
 
 
+def _pitch_builder(team, gid):
+    """The Pitch Canvas (Beckett) builder — a one-page structure for the Demo Day
+    pitch, auto-fillable from the team's own accumulated work."""
+    st.write("### 🎯 Build your pitch — the Pitch Canvas")
+    st.caption("A strong pitch is structured, not a wall of text. Fill each block below (keep it "
+               "short). The ✨ button drafts blocks from your real work — Customer Profile, VPC, "
+               "Business Model Canvas, Evidence Ledger, and your valuation — so your pitch stands "
+               "on evidence, not adjectives.")
+    saved = db.get_pitch_canvas(team["id"])
+    p = db.get_pitch(team["id"]) or {}
+    # one-click autofill of empty blocks
+    if st.button("✨ Draft from my work (fills empty blocks)", key="pitch_autofill"):
+        af = logic.pitch_canvas_autofill(team["id"])
+        for k, v in af.items():
+            if not (saved.get(k) or "").strip():
+                saved[k] = v
+        # persist immediately so the form shows the drafts
+        db.save_pitch(team["id"], gid,
+                      saved.get("simple_statement", p.get("headline", "")),
+                      saved.get("product", p.get("pitch", "")),
+                      saved.get("traction", p.get("best_evidence", "")),
+                      saved.get("call_to_action", p.get("ask", "")), canvas=saved)
+        st.rerun()
+
+    score = logic.pitch_canvas_score(saved)
+    st.progress(score["pct"], text=f"Pitch completeness: {score['done']}/{score['total']} blocks "
+                f"· core blocks {score['core_done']}/{score['core_total']}")
+    if score["missing_core"]:
+        st.caption("Still needed for a complete pitch: **" + ", ".join(score["missing_core"]) + "**.")
+    elif score["ready"]:
+        st.success("✅ Your core pitch is complete — polish the wording and you're ready to present.")
+
+    locked = logic.editing_locked(team["id"])
+    with st.form("pitch_canvas_form"):
+        vals = {}
+        for key, title, prompt, src in content.PITCH_CANVAS_BLOCKS:
+            core = key in content.PITCH_CORE_BLOCKS
+            lbl = f"{'⭐ ' if core else ''}{title}"
+            vals[key] = st.text_area(lbl, value=saved.get(key, ""), key=f"pc_{key}",
+                                     height=70, help=prompt + (f"  ·  Auto-fill source: {src}." if src else ""),
+                                     disabled=locked)
+        if st.form_submit_button("💾 Save pitch", type="primary", disabled=locked):
+            db.save_pitch(team["id"], gid,
+                          vals.get("simple_statement", ""), vals.get("product", ""),
+                          vals.get("traction", ""), vals.get("call_to_action", ""), canvas=vals)
+            st.success("Pitch saved.")
+            st.rerun()
+    st.caption("⭐ = core block. The blocks map to a classic investor pitch: hook → problem → "
+               "solution → why-you're-different → proof → how-you-make-money → the ask.")
+
+
 def demo_day(team):
     st.subheader("🎤 Demo Day — Evidence Exchange")
     _why("Progress")
@@ -1384,25 +1440,8 @@ def demo_day(team):
         st.success("🎉 The Evidence Exchange is OPEN — polish your pitch, then read and vote on "
                    "your peers' ventures.")
 
-    # ---- Your pitch ----------------------------------------------------------
-    st.write("### Your 60-second pitch")
-    p = db.get_pitch(team["id"]) or {}
-    se = logic.strongest_evidence(team["id"])
-    default_ev = p.get("best_evidence") or (
-        f"{se['description']} ({se['evidence_type']}, strength {se['strength']}/10)" if se else "")
-    with st.form("pitch_form"):
-        headline = st.text_input("One-line headline", value=p.get("headline", ""),
-                                 placeholder="Same-day healthy dinners for exhausted parents.")
-        pitch = st.text_area("The pitch — what, for whom, and why it works",
-                             value=p.get("pitch", ""))
-        best = st.text_area("Your single strongest piece of evidence", value=default_ev,
-                            help="Auto-filled from your Evidence Ledger's strongest item — edit freely.")
-        ask = st.text_input("Your ask (what you want next)", value=p.get("ask", ""),
-                            placeholder="A pilot with 10 families / a follow-on investment.")
-        if st.form_submit_button("💾 Save pitch", type="primary"):
-            db.save_pitch(team["id"], gid, headline, pitch, best, ask)
-            st.success("Pitch saved.")
-            st.rerun()
+    # ---- Your pitch — the Pitch Canvas builder -------------------------------
+    _pitch_builder(team, gid)
 
     if not is_open:
         return
@@ -2212,20 +2251,42 @@ def experiments(team):
                     st.error(f"❌ Reality disagreed — you predicted **{e['predicted_outcome']}** but "
                              f"the outcome was **{e['outcome']}**. That gap is the lesson.")
             if not editable:
-                st.write(f"**Result:** {e['result'] or '_(not recorded)_'}")
+                st.write(f"**Observed:** {e['result'] or '_(not recorded)_'}")
+                if e.get("learned"):
+                    st.write(f"**Learned:** {e['learned']}")
+                if e.get("decision"):
+                    st.write(f"**Decision:** {e['decision']}")
                 continue
+            # ---- Learning Card (Strategyzer): believed → tested → observed → learned → decide
+            st.markdown("**🃏 Learning Card** — capture the result as a decision, not just a note.")
+            st.caption(f"We believed: *{e['hypothesis']}*  ·  We tested with: *{e['card_type']}*  "
+                       f"·  measuring *{e['metric']}* (success: {e['success_threshold'] or '—'}).")
             result = st.text_area(
-                "Record result", value=e["result"] or "", key=f"res_{e['id']}",
-                help="What actually happened? Enter the measured numbers and what you observed.")
-            outcome = st.selectbox(
+                "Observed — the measured result", value=e["result"] or "", key=f"res_{e['id']}",
+                help="The numbers/behavior you actually saw. Compare it to your thresholds.")
+            learned = st.text_area(
+                "Learned — the insight", value=e.get("learned") or "", key=f"learn_{e['id']}",
+                help="What does this evidence tell you about the assumption and the model?")
+            oc1, oc2 = st.columns(2)
+            outcome = oc1.selectbox(
                 "Outcome", ["Designed", "Running", "Supported", "Refuted", "Inconclusive"],
                 index=["Designed", "Running", "Supported", "Refuted", "Inconclusive"].index(e["outcome"]),
                 key=f"outc_{e['id']}",
                 help="Compare the result to your thresholds. Supported/Refuted will auto-update "
                      "the linked assumption. Inconclusive = the test didn't settle it.")
-            if st.button("Save result", key=f"saveres_{e['id']}",
-                         help="Store the result and update the linked assumption."):
-                db.update_experiment(e["id"], result=result, outcome=outcome)
+            decision = oc2.selectbox(
+                "Decide — next action",
+                ["—", "Persevere (keep this belief)", "Pivot (change the model)",
+                 "Run a stronger test", "Stop / drop this idea"],
+                index=(["—", "Persevere (keep this belief)", "Pivot (change the model)",
+                        "Run a stronger test", "Stop / drop this idea"].index(e["decision"])
+                       if e.get("decision") in ["Persevere (keep this belief)", "Pivot (change the model)",
+                                                "Run a stronger test", "Stop / drop this idea"] else 0),
+                key=f"dec_{e['id']}", help="What will you DO because of this evidence?")
+            if st.button("Save Learning Card", key=f"saveres_{e['id']}",
+                         help="Store the result, insight, and decision; updates the linked assumption."):
+                db.update_experiment(e["id"], result=result, outcome=outcome,
+                                     learned=learned, decision=("" if decision == "—" else decision))
                 if e["assumption_id"] and outcome in ("Supported", "Refuted"):
                     db.update_assumption(e["assumption_id"], status=outcome)
                 st.success("Saved.")
@@ -2235,6 +2296,29 @@ def experiments(team):
 # --------------------------------------------------------------------------- #
 # Evidence ledger
 # --------------------------------------------------------------------------- #
+def _mom_test_coach():
+    """Interview coaching (The Mom Test): a live question checker plus the rules and
+    the commitment ladder. Coaching only — nothing is stored."""
+    with st.expander("🧪 Interview coach — “The Mom Test” (check a question before you ask it)"):
+        st.caption("Good evidence starts with good questions. The Mom Test's rules keep you from "
+                   "collecting polite lies:")
+        for r in content.MOM_TEST_RULES:
+            st.markdown(f"- {r}")
+        q = st.text_input("Paste a question you plan to ask a customer",
+                          key="momtest_q", placeholder="e.g. Tell me about the last time you tried to solve this.")
+        res = logic.mom_test_check(q)
+        if res["score"] is not None:
+            fn = st.success if res["score"] >= 70 else (st.warning if res["score"] >= 40 else st.error)
+            fn(f"{res['score']}/100 — {res['verdict']}")
+            for iss in res["issues"]:
+                st.markdown(f"  • ⚠️ “…{iss['pattern']}…” — {iss['why']}  \n    ↳ *Try instead:* {iss['better']}")
+            if res["good"]:
+                st.caption("👍 Grounded in real behavior: " + ", ".join(f"“{g}”" for g in res["good"]))
+        st.markdown("**Commitment ladder** — a real signal is a commitment, not a compliment:")
+        for name, desc in content.EVIDENCE_SIGNALS:
+            st.markdown(f"- **{name}** — {desc}")
+
+
 def evidence(team):
     st.subheader("📒 Evidence Ledger")
     _why("Evidence Ledger")
@@ -2264,6 +2348,8 @@ def evidence(team):
 
     with st.expander("📊 Evidence-strength ladder — how each type is valued"):
         st.table([{"Evidence": lbl, "Value (0–10)": val} for lbl, val in content.EVIDENCE_LADDER])
+
+    _mom_test_coach()
 
     assums = db.list_assumptions(team["id"])
     # Inputs live OUTSIDE a form so the misclassification check updates as you type —
@@ -2587,6 +2673,12 @@ def pivots(team):
         block = st.text_input(
             "Value Proposition / Business Model block affected",
             help="Which canvas box changes — e.g. Customer Segment, Channel, Revenue Stream.")
+        ptype = st.selectbox(
+            "Type of pivot (Lean Startup)", content.PIVOT_TYPE_NAMES,
+            index=content.PIVOT_TYPE_NAMES.index("Not sure yet"),
+            format_func=lambda n: f"{n} — {content.PIVOT_TYPE_BY_NAME[n]}",
+            help="Classifying the pivot forces clarity about WHAT is changing. A disciplined "
+                 "pivot keeps one foot on validated learning and changes one thing deliberately.")
         change = st.text_area(
             "Proposed change",
             help="Exactly what you want to change the model to.")
@@ -2608,7 +2700,7 @@ def pivots(team):
                     "original_assum": original, "challenge_evid": challenge,
                     "affected_block": block, "proposed_change": change,
                     "change_cost": cost, "new_assumptions": new_assums,
-                    "evidence_needed": needed,
+                    "evidence_needed": needed, "pivot_type": ptype,
                 })
                 st.success("Petition submitted to the investment committee.")
                 st.rerun()
@@ -2621,6 +2713,8 @@ def pivots(team):
             st.write(f"**Original assumption:** {p['original_assum']}")
             st.write(f"**Challenging evidence:** {p['challenge_evid']}")
             st.write(f"**Affected block:** {p['affected_block']}")
+            if p.get("pivot_type"):
+                st.write(f"**Pivot type:** {p['pivot_type']}")
             st.write(f"**Proposed change:** {p['proposed_change']}")
             st.write(f"**Change cost:** ${p['change_cost']:,.0f}")
             st.write(f"**New assumptions:** {p['new_assumptions']}")

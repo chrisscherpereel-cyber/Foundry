@@ -1523,7 +1523,7 @@ def assumption_risk_report(team_id):
 MINI_PIVOT_CREDIT = 3   # Evidence Credits for logging a course-correction (learning reward)
 
 
-def log_mini_pivot(team_id, original, evidence, change):
+def log_mini_pivot(team_id, original, evidence, change, pivot_type=""):
     """Record a lightweight, self-approved course-correction and reward the learning.
 
     Unlike the formal Pivot Petition (a late-round committee process), a mini-pivot
@@ -1532,7 +1532,7 @@ def log_mini_pivot(team_id, original, evidence, change):
     rnd = db.current_round()
     db.add_pivot(team_id,
                  {"original_assum": original, "challenge_evid": evidence,
-                  "proposed_change": change},
+                  "proposed_change": change, "pivot_type": pivot_type},
                  kind="mini", status="Logged", round_no=rnd)
     db.adjust_resources(team_id, credits=MINI_PIVOT_CREDIT, kind="learning",
                         description="Mini-pivot logged — learning from evidence",
@@ -1941,6 +1941,103 @@ def set_demo_open(game_id, on):
 def strongest_evidence(team_id):
     ev = db.list_evidence(team_id)
     return max(ev, key=lambda e: e["strength"]) if ev else None
+
+
+# --------------------------------------------------------------------------- #
+# Pitch Canvas (Demo Day) — auto-fill blocks from the team's own accumulated work
+# and score how complete the pitch is.
+# --------------------------------------------------------------------------- #
+def _canvas_block_text(team_id, ctype, block_key, limit=3):
+    """Join the first few non-empty items of a canvas block into a readable string."""
+    c = db.latest_canvas(team_id, ctype)
+    if not c:
+        return ""
+    val = (c.get("data") or {}).get(block_key)
+    if isinstance(val, (list, tuple)):
+        items = [str(v).strip() for v in val if str(v).strip()]
+        return "; ".join(items[:limit])
+    return str(val).strip() if val else ""
+
+
+def pitch_canvas_autofill(team_id):
+    """Suggested Pitch Canvas content drawn from the team's real work. Only returns
+    blocks it can populate; empty strings for the rest."""
+    team = db.get_team(team_id)
+    vn = db.get_venture_name(team_id).get("name") or team.get("name") or "our venture"
+    territory = team.get("opportunity") or "this market"
+    out = {}
+    out["simple_statement"] = f"{vn} helps people in {territory} by turning a real, evidence-backed problem into a working solution."
+    pains = _canvas_block_text(team_id, "customer_profile", "pains")
+    if pains:
+        out["pain_gain"] = f"The customer's biggest pains: {pains}. Relieving them lets the customer get their key job done with less cost and risk."
+    prod = _canvas_block_text(team_id, "vpc", "products_services") or _canvas_block_text(team_id, "vpc", "pain_relievers")
+    if prod:
+        out["product"] = f"Our offer: {prod}."
+    vp = _canvas_block_text(team_id, "bmc", "value_propositions")
+    if vp:
+        out["unique"] = f"What makes us different: {vp}."
+    se = strongest_evidence(team_id)
+    if se:
+        out["traction"] = (f"Strongest evidence so far: {se['description']} "
+                           f"({se.get('evidence_type','')}, strength {se['strength']}/10).")
+    rev = _canvas_block_text(team_id, "bmc", "revenue_streams")
+    if rev:
+        out["business_model"] = f"How we get paid: {rev}."
+    val = compute_valuation(team_id)
+    out["investment"] = (f"We're raising to reach our next milestone. Current evidence-based "
+                         f"valuation signal: ${val['valuation']:,.0f} at {val['evidence_coverage']*100:.0f}% evidence coverage.")
+    members = team_member_names(team)
+    card = db.get_founder_card(team_id) or {}
+    if members or card:
+        who = (", ".join(members) + ". ") if members else ""
+        out["team"] = f"{who}{card.get('skills','Our founding team')}."
+    return out
+
+
+def pitch_canvas_score(canvas):
+    """How complete the Pitch Canvas is, overall and on the core blocks."""
+    canvas = canvas or {}
+    def filled(k):
+        return bool((canvas.get(k) or "").strip())
+    total = len(content.PITCH_CANVAS_BLOCKS)
+    done = sum(1 for k, *_ in content.PITCH_CANVAS_BLOCKS if filled(k))
+    core_done = sum(1 for k in content.PITCH_CORE_BLOCKS if filled(k))
+    core_total = len(content.PITCH_CORE_BLOCKS)
+    missing_core = [content.PITCH_CANVAS_BY_KEY[k][0] for k in content.PITCH_CORE_BLOCKS
+                    if not filled(k)]
+    pct = done / total if total else 0
+    return {"done": done, "total": total, "core_done": core_done, "core_total": core_total,
+            "missing_core": missing_core, "pct": pct,
+            "ready": core_done == core_total}
+
+
+# --------------------------------------------------------------------------- #
+# The Mom Test — coach a customer-interview question toward real past behavior.
+# --------------------------------------------------------------------------- #
+def mom_test_check(question):
+    """Flag weak interview-question patterns and reward behavior-grounded ones.
+    Returns issues, positive signals, a 0–100 score, and a verdict."""
+    q = (question or "").lower().strip()
+    if not q:
+        return {"issues": [], "good": [], "score": None, "verdict": ""}
+    issues = []
+    for pat, why, better in content.MOM_TEST_BAD_PATTERNS:
+        if pat in q:
+            issues.append({"pattern": pat, "why": why, "better": better})
+    good = [s for s in content.MOM_TEST_GOOD_SIGNALS if s in q]
+    score = 60
+    score -= 22 * len(issues)
+    score += 15 * min(len(good), 2)
+    score = max(0, min(100, score))
+    if issues and not good:
+        verdict = "Rewrite — this asks for opinions or hypotheticals."
+    elif issues:
+        verdict = "Mixed — it touches real behavior but still leans on a hypothetical."
+    elif good:
+        verdict = "Strong — it digs into what actually happened."
+    else:
+        verdict = "Okay — try to anchor it to a specific past event."
+    return {"issues": issues, "good": good, "score": score, "verdict": verdict}
 
 
 def demo_config(game_id=None):

@@ -364,6 +364,11 @@ def init_db():
         # Pivots: lightweight "mini" course-corrections available from early rounds.
         _ensure_column(conn, "pivots", "kind", "TEXT DEFAULT 'formal'")
         _ensure_column(conn, "pivots", "round", "INTEGER")
+        _ensure_column(conn, "pivots", "pivot_type", "TEXT")   # Lean Startup pivot taxonomy
+        # Learning Card — structured result capture for an experiment.
+        _ensure_column(conn, "experiments", "learned", "TEXT")     # the insight
+        _ensure_column(conn, "experiments", "decision", "TEXT")    # persevere / pivot / stop / next
+        _ensure_column(conn, "experiments", "signal", "TEXT")      # evidence signal (commitment ladder)
         # AI logs: faster structured capture + link an AI claim to a real test so it
         # can auto-verify when that test resolves.
         _ensure_column(conn, "ai_logs", "claim_type", "TEXT")     # fact | prediction | opinion
@@ -407,6 +412,8 @@ def init_db():
             PRIMARY KEY (game_id, voter_team_id, votee_team_id))""")
         # Demo Day money allocation — dollars a voter invests in each pitch.
         _ensure_column(conn, "demo_votes", "amount", "INTEGER DEFAULT 0")
+        # Structured Pitch Canvas (JSON of block -> text) behind the Demo Day pitch.
+        _ensure_column(conn, "demo_pitches", "canvas", "TEXT")
         # Decision Journal: one round-adaptive focus question per entry.
         _ensure_column(conn, "reflections", "focus_prompt", "TEXT")
         _ensure_column(conn, "reflections", "focus_answer", "TEXT")
@@ -986,12 +993,13 @@ def add_pivot(team_id, data, kind="formal", status="Submitted", round_no=None):
         conn.execute(
             """INSERT INTO pivots(team_id, original_assum, challenge_evid, affected_block,
                 proposed_change, change_cost, new_assumptions, evidence_needed,
-                status, kind, round, created_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                status, kind, round, pivot_type, created_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (team_id, data.get("original_assum", ""), data.get("challenge_evid", ""),
              data.get("affected_block", ""), data.get("proposed_change", ""),
              data.get("change_cost", 0), data.get("new_assumptions", ""),
-             data.get("evidence_needed", ""), status, kind, round_no, now()),
+             data.get("evidence_needed", ""), status, kind, round_no,
+             data.get("pivot_type", ""), now()),
         )
         conn.commit()
     finally:
@@ -1690,22 +1698,31 @@ def award_badge(team_id, code):
 # --------------------------------------------------------------------------- #
 # Demo Day — pitches and peer votes
 # --------------------------------------------------------------------------- #
-def save_pitch(team_id, game_id, headline, pitch, best_evidence, ask):
+def save_pitch(team_id, game_id, headline, pitch, best_evidence, ask, canvas=None):
     conn = get_conn()
     try:
         conn.execute(
             """INSERT INTO demo_pitches(team_id, game_id, headline, pitch, best_evidence,
-                                        ask, updated_at)
-               VALUES(?,?,?,?,?,?,?)
+                                        ask, canvas, updated_at)
+               VALUES(?,?,?,?,?,?,?,?)
                ON CONFLICT(team_id) DO UPDATE SET
                  game_id=excluded.game_id, headline=excluded.headline, pitch=excluded.pitch,
                  best_evidence=excluded.best_evidence, ask=excluded.ask,
-                 updated_at=excluded.updated_at""",
-            (team_id, game_id, headline, pitch, best_evidence, ask, now()),
+                 canvas=excluded.canvas, updated_at=excluded.updated_at""",
+            (team_id, game_id, headline, pitch, best_evidence, ask,
+             _dumps(canvas) if canvas is not None else None, now()),
         )
         conn.commit()
     finally:
         conn.close()
+
+
+def get_pitch_canvas(team_id):
+    """The structured Pitch Canvas dict for a team (block key -> text)."""
+    p = get_pitch(team_id)
+    if not p or not p.get("canvas"):
+        return {}
+    return _loads(p["canvas"], {})
 
 
 def get_pitch(team_id):

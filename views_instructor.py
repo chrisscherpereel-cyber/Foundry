@@ -1484,6 +1484,8 @@ def pivot_committee():
             st.write(f"**Original assumption:** {p['original_assum']}")
             st.write(f"**Challenging evidence:** {p['challenge_evid']}")
             st.write(f"**Affected block:** {p['affected_block']}")
+            if p.get("pivot_type"):
+                st.write(f"**Pivot type:** {p['pivot_type']}")
             st.write(f"**Proposed change:** {p['proposed_change']}")
             st.write(f"**Change cost:** ${p['change_cost']:,.0f}")
             st.write(f"**New assumptions:** {p['new_assumptions']}")

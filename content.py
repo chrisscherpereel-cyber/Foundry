@@ -520,6 +520,114 @@ ENVIRONMENT_BLOCKS = [
 ]
 
 # --------------------------------------------------------------------------- #
+# The Pitch Canvas© (David Beckett / Best3Minutes) — a one-page structure for the
+# Demo Day pitch. Blocks are ordered as a narrative; several can be auto-filled
+# from the team's own work (see logic.pitch_canvas_autofill).
+#   key, title, prompt, source_hint (where the app can pre-fill it from)
+# --------------------------------------------------------------------------- #
+PITCH_CANVAS_BLOCKS = [
+    ("simple_statement", "Simple statement",
+     "One memorable sentence: what change you make for customers.", "venture name + territory"),
+    ("pain_gain", "Pain (+ gain)",
+     "What important problem are you solving, and what does relieving it give the customer?",
+     "Customer Profile pains"),
+    ("product", "Product",
+     "As simply as possible: what does it do, and what can customers now do as a result?",
+     "Value Proposition Canvas"),
+    ("demo", "Product demo",
+     "How will you show it's real — a screen flow, prototype, or a real customer using it?", None),
+    ("unique", "What's unique",
+     "Why do you get results differently from the alternatives? What's new or defensible?",
+     "BMC value propositions"),
+    ("traction", "Customer traction",
+     "Your strongest evidence so far — behavior, pilots, pre-orders, quotes. Use facts.",
+     "strongest evidence"),
+    ("business_model", "Business model",
+     "How do you get paid, and where's the room to grow?", "BMC revenue streams"),
+    ("investment", "Investment / the ask",
+     "What are you asking for, and what milestone will it reach?", "valuation + ask"),
+    ("team", "Team",
+     "What about your team makes you the ones to solve this?", "founder card"),
+    ("call_to_action", "Call to action",
+     "Finish strong with one clear next step you want from the audience.", None),
+    ("why_you", "Why you?",
+     "Why do you care about this problem? (Can appear anywhere in the pitch.)", None),
+]
+PITCH_CANVAS_BY_KEY = {k: (t, p, s) for k, t, p, s in PITCH_CANVAS_BLOCKS}
+# The blocks most worth insisting on for a strong, evidence-led pitch.
+PITCH_CORE_BLOCKS = ["simple_statement", "pain_gain", "product", "traction",
+                     "business_model", "investment", "call_to_action"]
+
+# --------------------------------------------------------------------------- #
+# The Mom Test (Rob Fitzpatrick) — coaching for customer interviews. The checker
+# flags questions that tend to produce worthless answers (opinions, hypotheticals,
+# or pitching your idea) and rewards questions about real past behavior.
+# --------------------------------------------------------------------------- #
+MOM_TEST_RULES = [
+    "Talk about their life, not your idea.",
+    "Ask about specifics in the past, not generics or opinions about the future.",
+    "Talk less and listen more.",
+]
+# (pattern, why it's weak, a better move) — matched case-insensitively as substrings.
+MOM_TEST_BAD_PATTERNS = [
+    ("would you", "Hypothetical — people over-promise about the future.",
+     "Ask what they did last time this problem came up."),
+    ("could you", "Hypothetical — imagines a future that may never happen.",
+     "Ask about the last real occurrence instead."),
+    ("do you think", "Asks for an opinion; opinions are worthless.",
+     "Ask what they actually did, not what they think."),
+    ("what do you think of", "Fishing for a compliment about your idea.",
+     "Don't mention your idea — ask about their problem."),
+    ("if we built", "Pitches your idea and invites a polite lie.",
+     "Ask how they solve it today."),
+    ("would you buy", "A hypothetical purchase — not a real commitment.",
+     "Ask what they've paid for near-solutions before."),
+    ("do you ever", "Invites a vague 'sometimes'.",
+     "Ask about the last specific time it happened."),
+    ("how much would you pay", "Made-up numbers; willingness is talk, not behavior.",
+     "Ask what they currently spend on the problem."),
+    ("our app", "You're pitching, not learning.",
+     "Keep your solution out of it and study their world."),
+    ("our product", "You're pitching, not learning.",
+     "Keep your solution out of it and study their world."),
+]
+# Words that signal a question is grounded in real past behavior (good).
+MOM_TEST_GOOD_SIGNALS = ["last time", "the last", "tell me about", "walk me through",
+                         "what happened", "how do you currently", "how did you", "when was",
+                         "what did you do", "how often did", "show me", "what have you"]
+
+# The evidence 'signal' a piece of evidence represents — a commitment ladder.
+EVIDENCE_SIGNALS = [
+    ("Compliment / opinion", "They said they liked it (weakest — easy to say)."),
+    ("Stated intention", "They said they would (talk about the future)."),
+    ("Past behavior", "What they actually did before (real, but not a commitment to you)."),
+    ("Time commitment", "They gave real time (a meeting, a trial, follow-ups)."),
+    ("Reputation commitment", "They put their name on it (a referral, an intro, going public)."),
+    ("Money commitment", "They paid or pre-ordered (strongest signal)."),
+]
+
+# --------------------------------------------------------------------------- #
+# Pivot types (Eric Ries, The Lean Startup) — classify a pivot so it's a
+# deliberate, teachable move rather than a vague 'we changed something'.
+# --------------------------------------------------------------------------- #
+PIVOT_TYPES = [
+    ("Zoom-in", "A single feature becomes the whole product."),
+    ("Zoom-out", "What was the whole product becomes one feature of a bigger one."),
+    ("Customer segment", "The product fits a real problem, but for a different customer than planned."),
+    ("Customer need", "The target customer has a problem worth solving — just not the one you targeted."),
+    ("Platform", "Switch between an application and a platform (or vice versa)."),
+    ("Business architecture", "Switch between high-margin/low-volume and low-margin/high-volume."),
+    ("Value capture", "Change how you monetize / the revenue model."),
+    ("Engine of growth", "Change the growth engine — viral, sticky, or paid."),
+    ("Channel", "Reach customers through a different channel."),
+    ("Technology", "Achieve the same solution with a different technology."),
+    ("Not sure yet", "You know the model must change but haven't classified it."),
+]
+PIVOT_TYPE_NAMES = [p[0] for p in PIVOT_TYPES]
+PIVOT_TYPE_BY_NAME = {p[0]: p[1] for p in PIVOT_TYPES}
+
+
+# --------------------------------------------------------------------------- #
 # Assumption risk types (Strategyzer testing lens)
 # --------------------------------------------------------------------------- #
 RISK_TYPES = ["Desirability", "Feasibility", "Viability", "Adaptability"]
