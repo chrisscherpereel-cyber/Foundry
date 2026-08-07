@@ -364,9 +364,11 @@ def student_shell():
         _sidebar_commit_status(team)
         st.divider()
         page = _student_nav(team)
-        with st.expander("Rotating team roles"):
-            for role, desc in content.TEAM_ROLES:
-                st.caption(f"**{role}** — {desc}")
+        with st.expander("Perspectives (rotate each round)"):
+            st.caption("Six critical lenses your team rotates through. You take one each round in "
+                       "the Decision Journal — see its full description there.")
+            for pr in content.PERSPECTIVES:
+                st.caption(f"{pr['icon']} **{pr['name']}** — {pr['lens']}")
         st.button("Log out", on_click=logout)
 
     _scroll_top_on_change("_student_page", page)

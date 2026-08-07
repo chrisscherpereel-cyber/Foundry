@@ -1699,6 +1699,57 @@ def team_identity(team):
     }
 
 
+# --------------------------------------------------------------------------- #
+# Rotating perspectives (the six roles as reflection lenses).
+#   mode "random" (default) — the app randomly assigns each roster member a
+#        perspective per round (stable per team+round, re-rolled each round).
+#   mode "team" — the student team picks perspectives themselves.
+# --------------------------------------------------------------------------- #
+def perspective_mode(game_id=None):
+    gid = game_id if game_id is not None else db.active_game_id()
+    m = db.get_setting(f"perspective_mode:{gid}", "random")
+    return m if m in ("random", "team") else "random"
+
+
+def set_perspective_mode(game_id, mode):
+    gid = game_id if game_id is not None else db.active_game_id()
+    db.set_setting(f"perspective_mode:{gid}", "team" if mode == "team" else "random")
+
+
+def assigned_perspective(team, member_name, round_no):
+    """The randomly-assigned perspective for a named roster member in a round.
+    Deterministic per (team, round) so it doesn't churn on reruns, but re-rolled each
+    round. Returns a perspective dict, or None if the member isn't on a known roster."""
+    names = team_member_names(team)
+    if not names or member_name not in names:
+        return None
+    import random as _r
+    order = list(range(len(content.PERSPECTIVES)))
+    _r.Random(f"{team['id']}-{round_no}").shuffle(order)
+    idx = names.index(member_name)
+    return content.PERSPECTIVES[order[idx % len(order)]]
+
+
+def perspective_coverage(team_id):
+    """Which perspectives a team has used across all journal entries, and how often —
+    for the instructor coverage readout."""
+    counts = {p["name"]: 0 for p in content.PERSPECTIVES}
+    for r in db.list_reflections(team_id):
+        name = (r.get("perspective") or "").strip()
+        if name in counts:
+            counts[name] += 1
+    covered = sum(1 for v in counts.values() if v)
+    return {"counts": counts, "covered": covered, "total": len(content.PERSPECTIVES)}
+
+
+def perspectives_used_this_round(team_id, round_no):
+    used = set()
+    for r in db.list_reflections(team_id):
+        if r["round"] == round_no and (r.get("perspective") or "").strip():
+            used.add(r["perspective"])
+    return used
+
+
 def team_member_names(team):
     """The roster member names for a team (from an imported class list), if any."""
     import json as _json

@@ -429,6 +429,9 @@ def init_db():
         # Decision Journal: one round-adaptive focus question per entry.
         _ensure_column(conn, "reflections", "focus_prompt", "TEXT")
         _ensure_column(conn, "reflections", "focus_answer", "TEXT")
+        # Rotating perspective (lens) taken for this journal entry, + the lens answer.
+        _ensure_column(conn, "reflections", "perspective", "TEXT")
+        _ensure_column(conn, "reflections", "perspective_note", "TEXT")
         # Seed default settings once.
         cur = conn.execute("SELECT value FROM settings WHERE key='current_round'")
         if cur.fetchone() is None:
@@ -1105,11 +1108,13 @@ def add_reflection(team_id, data):
         vals = (data.get("expected", ""), data.get("occurred", ""),
                 data.get("assumption", ""), data.get("overlooked", ""),
                 data.get("differently", ""), data.get("contribution", ""),
-                data.get("focus_prompt", ""), data.get("focus_answer", ""))
+                data.get("focus_prompt", ""), data.get("focus_answer", ""),
+                data.get("perspective", ""), data.get("perspective_note", ""))
         if existing:
             conn.execute(
                 """UPDATE reflections SET expected=?, occurred=?, assumption=?, overlooked=?,
-                    differently=?, contribution=?, focus_prompt=?, focus_answer=?, created_at=?
+                    differently=?, contribution=?, focus_prompt=?, focus_answer=?,
+                    perspective=?, perspective_note=?, created_at=?
                    WHERE id=?""",
                 (*vals, now(), existing),
             )
@@ -1117,8 +1122,8 @@ def add_reflection(team_id, data):
             conn.execute(
                 """INSERT INTO reflections(team_id, student_name, round, expected, occurred,
                     assumption, overlooked, differently, contribution, focus_prompt,
-                    focus_answer, created_at)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    focus_answer, perspective, perspective_note, created_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (team_id, data.get("student_name", ""), data.get("round", 1), *vals, now()),
             )
         conn.commit()

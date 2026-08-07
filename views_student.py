@@ -2839,6 +2839,39 @@ def pivots(team):
 # --------------------------------------------------------------------------- #
 # Reflections (individual accountability)
 # --------------------------------------------------------------------------- #
+def _journal_perspective(team, name, cur):
+    """Choose/show the student's perspective (lens) for this round's journal entry.
+    Director sets Random (auto-assign to roster members) or Team-controlled (self-pick)."""
+    if not name.strip():
+        return None
+    gid = team.get("game_id")
+    mode = logic.perspective_mode(gid)
+    st.markdown("#### 🎭 Your perspective this round")
+    auto = logic.assigned_perspective(team, name, cur) if mode == "random" else None
+    if auto:
+        persp = auto
+        st.info(f"{persp['icon']} You've been assigned **{persp['name']}** this round "
+                "(random rotation set by your instructor).")
+    else:
+        if mode == "random":
+            st.caption("Random assignment needs an imported roster — pick your perspective for now.")
+        used = logic.perspectives_used_this_round(team["id"], cur)
+        names = content.PERSPECTIVE_NAMES
+        existing = db.get_reflection(team["id"], name, cur) or {}
+        default = existing.get("perspective") or next((n for n in names if n not in used), names[0])
+        idx = names.index(default) if default in names else 0
+        pick = st.selectbox("Take a perspective", names, index=idx,
+                            format_func=lambda n: f"{content.perspective_by_name(n)['icon']} {n}",
+                            help="Rotate perspectives across rounds so you practice all six.")
+        persp = content.perspective_by_name(pick)
+        if used:
+            st.caption("Already taken by teammates this round: " + ", ".join(sorted(used)) + ".")
+    st.markdown(f"**🔎 Your lens:** {persp['lens']}")
+    with st.expander(f"What does the {persp['name']} do? (full description)"):
+        st.markdown(persp["detail"])
+    return persp
+
+
 def reflections(team):
     st.subheader("📝 Entrepreneurial Decision Journal")
     _why("Decision Journal")
@@ -2897,6 +2930,7 @@ def reflections(team):
         ex = existing or {}
         if existing:
             st.caption("✏️ Editing your existing entry for this round.")
+        persp = _journal_perspective(team, name, cur) if name else None
         _ai_ack_popover(team, "Decision Journal", "journal_ai", label=_AI_LOG_LABEL)
         with st.form("reflection_form", clear_on_submit=False):
             vals = {}
@@ -2906,6 +2940,12 @@ def reflections(team):
             focus_answer = st.text_area(f"🎯 {focus_q}", value=ex.get("focus_answer", ""),
                                         key=f"jr_focus_{cur}",
                                         help="This prompt changes with the round's topic.")
+            persp_note = ""
+            if persp:
+                persp_note = st.text_area(
+                    f"{persp['icon']} As {persp['name']}: {persp['lens']}",
+                    value=ex.get("perspective_note", ""), key=f"jr_persp_{cur}",
+                    help="Answer this round's key decision from your assigned perspective.")
             with st.expander("Add more (optional)"):
                 for keyname, label, stem in content.JOURNAL_OPTIONAL:
                     vals[keyname] = st.text_area(label, value=ex.get(keyname, ""),
@@ -2925,6 +2965,8 @@ def reflections(team):
                         "overlooked": vals.get("overlooked", ""),
                         "contribution": vals.get("contribution", ""),
                         "focus_prompt": focus_q, "focus_answer": focus_answer,
+                        "perspective": persp["name"] if persp else "",
+                        "perspective_note": persp_note,
                     })
                     st.success("Saved. Come back to edit it anytime before the round advances.")
                     st.rerun()
@@ -2940,7 +2982,10 @@ def reflections(team):
     if refs:
         st.write(f"### {len(refs)} entry(ies) on record")
         for r in refs:
-            with st.expander(f"{r['student_name']} · Round {r['round']} · {r['created_at']}"):
+            _ptag = f" · 🎭 {r['perspective']}" if (r.get('perspective') or '').strip() else ""
+            with st.expander(f"{r['student_name']} · Round {r['round']}{_ptag} · {r['created_at']}"):
+                if (r.get('perspective') or '').strip():
+                    st.write(f"**As {r['perspective']}:** {r.get('perspective_note') or '—'}")
                 st.write(f"**Expected:** {r['expected']}")
                 st.write(f"**Occurred:** {r['occurred']}")
                 if (r.get('focus_prompt') or '').strip():

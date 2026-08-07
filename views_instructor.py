@@ -806,6 +806,18 @@ def round_control():
             logic.set_auto_flag("strict_round_mode", strict)
             st.success("Round mode saved.")
 
+        gid = db.active_game_id()
+        _pm = logic.perspective_mode(gid)
+        pmode = st.radio(
+            "Decision-Journal perspectives", ["Random (default)", "Team-controlled"],
+            index=0 if _pm == "random" else 1,
+            help="Random: the app assigns each roster member a rotating perspective (lens) per "
+                 "round. Team-controlled: students pick their own perspective each round. "
+                 "Without an imported roster, Random falls back to self-selection.")
+        if st.button("Save perspective mode"):
+            logic.set_perspective_mode(gid, "random" if pmode.startswith("Random") else "team")
+            st.success("Perspective mode saved.")
+
     _ai_feedback_settings()
     _mail_settings()
 
@@ -1848,6 +1860,28 @@ def overview():
                "so early rounds are low by design. **⚠️ Flagged evidence** = items whose wording "
                "may not match the strength the team chose (likely opinion logged as behavior, or "
                "vice-versa) — a coaching signal, not an automatic penalty.")
+
+    # ---- Perspective coverage (rotating Decision-Journal lenses) --------------
+    st.markdown("### 🎭 Perspective coverage")
+    _pm = logic.perspective_mode(db.active_game_id())
+    st.caption(f"Which journal perspectives (lenses) each team has taken across all rounds — a "
+               f"check that everyone is practising every lens, not just one. Assignment mode: "
+               f"**{'Random' if _pm == 'random' else 'Team-controlled'}** (change it on Round "
+               f"Control). Numbers are how many entries used that lens.")
+    short = {"Venture Architect": "Architect", "Customer Advocate": "Customer",
+             "Experiment Lead": "Experiment", "Financial Skeptic": "Finance",
+             "Evidence Auditor": "Auditor", "Responsible Innovation Officer": "Responsible"}
+    prows = []
+    for t in teams:
+        cov = logic.perspective_coverage(t["id"])
+        row = {"Team": logic.team_identity(t)["display"],
+               "Covered": f"{cov['covered']}/{cov['total']}"}
+        for name, n in cov["counts"].items():
+            row[short.get(name, name)] = n or "—"
+        prows.append(row)
+    st.dataframe(prows, use_container_width=True, hide_index=True)
+    st.caption("A team stuck at a low 'Covered' number (or with all entries in one column) isn't "
+               "rotating perspectives — nudge them to vary the lens each round.")
 
     # Fairness check — are all teams starting on equal footing?
     diff = db.get_setting("difficulty", "not set")

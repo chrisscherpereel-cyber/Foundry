@@ -802,6 +802,81 @@ TEAM_ROLES = [
 ]
 
 # --------------------------------------------------------------------------- #
+# Perspectives — the six roles reframed as analytical LENSES a student takes when
+# reflecting on the round's key decision (in the Decision Journal). A lens is never
+# "idle" the way an ownership role is, because it's a way of interrogating whatever
+# decision is on the table — so every perspective works from Round 1 onward,
+# regardless of which tools have unlocked.
+#   key, name, icon, lens (the question to answer this round), detail (full description)
+# --------------------------------------------------------------------------- #
+PERSPECTIVES = [
+    {"key": "architect", "name": "Venture Architect", "icon": "🧩",
+     "lens": "Does this decision still hang together with everything else we've committed to — "
+             "our founder means, our customer, and the rest of the model?",
+     "detail": "You hold the whole picture. Your job is coherence: make sure each new decision "
+               "fits the pieces already in place, and flag inconsistencies before they harden. "
+               "Early rounds: does the opportunity we chose actually fit our founder means and "
+               "network? Middle rounds: do the Value Proposition Canvas and the Business Model "
+               "Canvas blocks reinforce one another, or do they contradict? Late rounds: does the "
+               "story an investor hears line up across every artifact? A good Architect can point "
+               "to the one block that would have to change if a single assumption were wrong."},
+    {"key": "customer", "name": "Customer Advocate", "icon": "🗣️",
+     "lens": "What customer evidence backs this decision — real behavior, or just opinion and "
+             "enthusiasm?",
+     "detail": "You speak for the customer, who isn't in the room. Your job is to challenge any "
+               "claim that rests on what people SAID rather than what they DID. Push for specifics: "
+               "which customer, in what situation, doing what? Distrust compliments and "
+               "hypotheticals ('I would definitely buy that'); trust behavior and commitments "
+               "(they showed up, paid, referred, came back). If the team is about to build on an "
+               "untested belief about the customer, you are the one who says 'how do we know?'"},
+    {"key": "experiment", "name": "Experiment Lead", "icon": "🧪",
+     "lens": "What's the cheapest test that could prove this wrong, and what result would actually "
+             "change our mind?",
+     "detail": "You protect the integrity of learning. Turn beliefs into falsifiable tests: name "
+               "the hypothesis, the metric, and the success/failure line BEFORE running anything, "
+               "so the team can't move the goalposts afterward. Favor cheap discovery tests first, "
+               "then escalate to stronger validation. Watch for confirmation bias, leading "
+               "questions, and tests that can only ever 'succeed'. Your recurring question: if we're "
+               "wrong about this, what result would show it — and can we get that result cheaply?"},
+    {"key": "finance", "name": "Financial Skeptic", "icon": "💰",
+     "lens": "What would have to be true about money — who pays, how much, and can we afford to find "
+             "out — for this decision to matter?",
+     "detail": "You keep the venture honest about viability and affordable loss. Early on that's not "
+               "spreadsheets — it's 'who would actually pay for this, and what's the most we can "
+               "risk to learn that?' As the model matures you press on pricing, unit economics, and "
+               "contribution margin: does a single sale earn more than it costs to serve? You also "
+               "guard against sunk-cost reasoning — money already spent should never justify "
+               "continuing. Your question: does the math even have a chance of working?"},
+    {"key": "auditor", "name": "Evidence Auditor", "icon": "🔍",
+     "lens": "How strong is the evidence we're leaning on, and what did we actually learn (versus "
+             "assume) this round?",
+     "detail": "You grade the quality of what the team knows. Rank evidence on the ladder — a signed "
+               "pre-order outweighs a friendly survey — and separate what's genuinely established "
+               "from what's still assumed. You also own the paper trail: what did we learn this "
+               "round, and did our confidence actually move to match the evidence? You are the "
+               "natural checker of the AI Assist Log (was the AI's claim verified?) and of whether "
+               "the team is well-calibrated rather than over- or under-confident."},
+    {"key": "responsible", "name": "Responsible Innovation Officer", "icon": "⚖️",
+     "lens": "Who could be harmed or excluded by this decision — privacy, fairness, trust — and "
+             "whose interests are we not representing?",
+     "detail": "You represent everyone the venture touches but who has no seat at the table: "
+               "vulnerable users, people whose data you'd collect, communities affected by the "
+               "business model. Your job is to surface privacy, fairness, safety, and trust risks "
+               "early — when they're cheap to fix — and to check decisions against the team's own "
+               "ethical boundary on the founder card. You watch regulatory and ethical market "
+               "events closely. Your question: if this worked at scale, who might it hurt?"},
+]
+PERSPECTIVE_BY_KEY = {p["key"]: p for p in PERSPECTIVES}
+PERSPECTIVE_NAMES = [p["name"] for p in PERSPECTIVES]
+
+
+def perspective_by_name(name):
+    for p in PERSPECTIVES:
+        if p["name"] == name:
+            return p
+    return None
+
+# --------------------------------------------------------------------------- #
 # Semester structure (15 weeks)
 # --------------------------------------------------------------------------- #
 SEMESTER = [
