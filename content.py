@@ -792,15 +792,6 @@ DIMENSION_NAMES = [d[0] for d in DASHBOARD_DIMENSIONS]
 # --------------------------------------------------------------------------- #
 # Team roles (rotate every 2–3 weeks)
 # --------------------------------------------------------------------------- #
-TEAM_ROLES = [
-    ("Venture Architect", "Maintains the Business Model Canvas and identifies inconsistencies."),
-    ("Customer Advocate", "Challenges claims that lack customer evidence."),
-    ("Experiment Lead", "Designs tests and protects experiment validity."),
-    ("Financial Skeptic", "Tests pricing, costs, revenue, and unit economics."),
-    ("Evidence Auditor", "Evaluates the quality of information and documents learning."),
-    ("Responsible Innovation Officer", "Identifies privacy, fairness, trust, and stakeholder risks."),
-]
-
 # --------------------------------------------------------------------------- #
 # Perspectives — the six roles reframed as analytical LENSES a student takes when
 # reflecting on the round's key decision (in the Decision Journal). A lens is never

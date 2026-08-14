@@ -54,15 +54,26 @@ def _sync_active_game():
 
 
 def _scroll_top_on_change(state_key, page):
-    """Scroll the main pane to the top whenever the selected page changes."""
+    """Scroll the main pane to the top whenever the selected page changes.
+
+    Streamlit reuses (does not remount) a components.html iframe when its HTML is
+    byte-for-byte identical across reruns, so an unchanged scroll script would not
+    re-execute on the next navigation. We embed a unique NAV TOKEN (the destination
+    page + a monotonic counter) so the HTML differs on every navigation, which forces
+    the iframe to remount and the scroll to run again — exactly once per navigation."""
     if st.session_state.get(state_key) != page:
         st.session_state[state_key] = page
+        token = st.session_state.get("_nav_token", 0) + 1
+        st.session_state["_nav_token"] = token
         components.html(
-            "<script>var d=window.parent.document;"
-            "['section.main','[data-testid=\"stMain\"]',"
+            f"<!-- nav:{page}:{token} -->"
+            "<script>(function(){var d=window.parent.document;"
+            "function top(){['section.main','[data-testid=\"stMain\"]',"
             "'[data-testid=\"stAppViewContainer\"]'].forEach(function(s){"
             "var e=d.querySelector(s); if(e){e.scrollTo(0,0);}});"
-            "window.parent.scrollTo(0,0);</script>",
+            "try{window.parent.scrollTo(0,0);}catch(e){}}"
+            # run now and once more after layout settles, then stop (no continuous forcing)
+            "top(); window.parent.requestAnimationFrame(top);})();</script>",
             height=0,
         )
 
@@ -233,28 +244,6 @@ def _next_action_strip(team, page):
                       on_click=_set_student_page, args=(target,))
     else:
         c1.caption(f"📍 Round {rnd}  ·  ✅ You're caught up this round.")
-
-
-def _make_student_label(team):
-    """Sidebar labels: lock/reference state + round tag + Inbox unread + commit badge."""
-    unread = db.unread_count(team["id"])
-    rnd = db.current_round()
-    committed = logic.commitment_state(team["id"], rnd)["committed"]
-
-    def label(page):
-        if page == "Inbox":
-            return f"Inbox 🔵{unread}" if unread else "Inbox"
-        if page == "Round Briefing":
-            # Surface commit status right where the commit control lives.
-            return "Round Briefing ✅" if committed else "Round Briefing ⚠️"
-        state = logic.tool_state(page, rnd, team["id"])
-        if state == "locked":
-            return f"🔒 {page} · R{logic.page_unlock_round(page)}"
-        if state == "reference" and logic.strict_round_mode():
-            return f"👁️ {page}"
-        return page
-
-    return label
 
 
 def _sidebar_todo(team):

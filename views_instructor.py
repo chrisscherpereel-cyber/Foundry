@@ -1877,7 +1877,7 @@ def overview():
         row = {"Team": logic.team_identity(t)["display"],
                "Covered": f"{cov['covered']}/{cov['total']}"}
         for name, n in cov["counts"].items():
-            row[short.get(name, name)] = n or "—"
+            row[short.get(name, name)] = int(n)   # keep the column numeric (0 = not taken)
         prows.append(row)
     st.dataframe(prows, use_container_width=True, hide_index=True)
     st.caption("A team stuck at a low 'Covered' number (or with all entries in one column) isn't "
