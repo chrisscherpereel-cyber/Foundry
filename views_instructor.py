@@ -1084,6 +1084,17 @@ def demo_day_admin():
 # --------------------------------------------------------------------------- #
 # Team setup
 # --------------------------------------------------------------------------- #
+
+@st.cache_data(show_spinner=False)
+def _roster_template_bytes():
+    """The example roster workbook never changes — build it once per process instead
+    of re-generating it with openpyxl on every rerun of Team Setup."""
+    import io
+    tb = io.BytesIO()
+    logic.roster_template_workbook().save(tb)
+    return tb.getvalue()
+
+
 def team_setup():
     st.subheader("👥 Team Setup")
     _guide(
@@ -1119,11 +1130,8 @@ def team_setup():
     st.caption("Upload a class contact list. Each **Class + Section** becomes its own game, "
                "each **Team** number becomes a team, and the members are saved to that team's "
                "roster. Names in your file are only used as the roster.")
-    import io
-    tb = io.BytesIO()
-    logic.roster_template_workbook().save(tb)
     st.download_button(
-        "⬇️ Download example template (.xlsx)", tb.getvalue(), "roster_template.xlsx",
+        "⬇️ Download example template (.xlsx)", _roster_template_bytes(), "roster_template.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         help="Columns: FirstName, LastName, PrimaryEmail, Class, Section, Team.")
 

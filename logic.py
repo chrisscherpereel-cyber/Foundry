@@ -7,6 +7,7 @@ Kept free of Streamlit so it can be unit-tested and reused.
 
 import json
 import re
+import threading
 from datetime import datetime, timezone
 
 import db
@@ -23,6 +24,13 @@ def total_rounds():
         return content.DEFAULT_TOTAL_ROUNDS
 
 
+def _copy_schedule(rows):
+    # Same shape the original returned: fresh outer dicts/lists, shared (read-only)
+    # curriculum topic dicts from content.py — avoids deep-copying the curriculum.
+    return [dict(r, topics=list(r["topics"])) for r in rows]
+
+
+@db.run_memo(copier=_copy_schedule)
 def get_schedule():
     """Return the ordered schedule: each round with its LIST of topic dicts.
 
@@ -518,6 +526,7 @@ def concept_progress(team_id, rnd):
 
 
 # ---- Carry-forward of unfinished prior work -------------------------------- #
+@db.run_memo
 def outstanding_prior(team_id, rnd):
     """Incomplete deliverables AND unanswered concept-checks from earlier rounds."""
     out = []
@@ -539,6 +548,7 @@ def outstanding_prior(team_id, rnd):
     return out
 
 
+@db.run_memo
 def round_checklist(team_id, rnd):
     """Everything a team must finish THIS round: this round's decisions and concept
     questions, plus any unfinished work carried over from earlier rounds."""
@@ -910,6 +920,7 @@ def effort_color(effort):
 
 def set_build_budget(team_id, hours):
     """Commit business-development hours this round (capped so effort ≤ 80)."""
+    db.invalidate_run_cache()        # read the live spent_build, not this run's copy
     team = db.get_team(team_id)
     hours = int(max(0, min(max_build(team), hours)))
     spent_b = int(team.get("spent_build") or 0)
@@ -932,8 +943,7 @@ def sync_round_hours(team):
 
 def _add_usage(team_id, field, hours):
     """Increment a per-round hours-usage counter (spent_build/train/other)."""
-    cur = db.get_team(team_id).get(field) or 0
-    db.update_team(team_id, **{field: cur + hours})
+    db.increment_team_field(team_id, field, hours)
 
 
 def hours_breakdown(team):
@@ -1024,7 +1034,49 @@ def _parse_dt(text):
         return None
 
 
+# --------------------------------------------------------------------------- #
+# Round-advance serialization
+#   Streamlit runs every session in one process, so a per-game lock stops several
+#   sessions that load at the same moment (e.g. a whole class right after a
+#   scheduled advance time) from each advancing the round, double-charging
+#   salaries, double-applying learning, or double-sending round mail.
+# --------------------------------------------------------------------------- #
+_ADVANCE_LOCKS = {}
+_ADVANCE_LOCKS_GUARD = threading.Lock()
+
+
+def advance_lock(game_id):
+    with _ADVANCE_LOCKS_GUARD:
+        return _ADVANCE_LOCKS.setdefault(game_id, threading.RLock())
+
+
+def sync_active_game():
+    """Apply date-based auto-advance and round-change side effects for the active
+    game, exactly once across concurrent sessions. If another session is already
+    advancing this game, don't wait (that work can include slow AI mail) — just
+    render with the current round; the next interaction picks up the result."""
+    lock = advance_lock(db.active_game_id())
+    if not lock.acquire(blocking=False):
+        return db.current_round()
+    try:
+        db.invalidate_run_cache()          # re-read round/marker inside the lock
+        prev = db.current_round()
+        new = maybe_auto_advance()
+        on_round_change(new)
+        if new != prev and auto_flag("auto_run_on_advance", default=False):
+            run_autopilot(new)
+        return new
+    finally:
+        lock.release()
+
+
 def director_advance(target):
+    with advance_lock(db.active_game_id()):
+        db.invalidate_run_cache()
+        return _director_advance(target)
+
+
+def _director_advance(target):
     """The single, canonical 'advance the cohort' action used by both Round Control
     and the Start-here home. Advancing from the current round to `target`:
       • moves the round and applies learning / resets hours / charges salaries,
@@ -1903,7 +1955,9 @@ def commit_streak(team_id):
 def founder_level(team_id):
     """A team 'founder level' that grows with skill (training + learning by doing).
     Returns (level, total_effective_skill)."""
-    total = sum(effective_skill(team_id, k) for k in content.FOUNDER_SKILL_KEYS)
+    skills, boosts = db.get_team_skills(team_id), hire_boost(team_id)   # read once
+    total = sum(effective_skill(team_id, k, skills, boosts)
+                for k in content.FOUNDER_SKILL_KEYS)
     return 1 + int(total // 6), total
 
 

@@ -28,29 +28,42 @@ import views_instructor as vi
 
 # Browser-tab favicon: the Molten V logo (falls back to an emoji if unavailable).
 _ICON_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "favicon.png")
-_PAGE_ICON = "🏭"
-if os.path.exists(_ICON_PATH):
-    try:
-        from PIL import Image
-        _PAGE_ICON = Image.open(_ICON_PATH)
-    except Exception:
-        _PAGE_ICON = _ICON_PATH
+
+
+@st.cache_resource(show_spinner=False)
+def _page_icon():
+    """Decode the favicon once per server process instead of on every rerun."""
+    if os.path.exists(_ICON_PATH):
+        try:
+            from PIL import Image
+            img = Image.open(_ICON_PATH)
+            img.load()
+            return img
+        except Exception:
+            return _ICON_PATH
+    return "🏭"
+
 
 st.set_page_config(page_title="Venture Foundry — From hunch to hard evidence",
-                   page_icon=_PAGE_ICON, layout="wide")
+                   page_icon=_page_icon(), layout="wide")
 
-db.init_db()
+
+@st.cache_resource(show_spinner=False)
+def _init_db_once():
+    """Create/migrate the schema once per server process (it used to run on every
+    rerun of every session: ~20 statements + a dozen PRAGMA lookups per click)."""
+    db.init_db()
+    return True
+
+
+_init_db_once()
 
 
 def _sync_active_game():
     """Apply date-based auto-advance and round-change side effects for whichever game
-    is currently active (a student's game, or the Director's selected game)."""
-    prev = db.current_round()
-    new = logic.maybe_auto_advance()
-    logic.on_round_change(new)
-    if new != prev and logic.auto_flag("auto_run_on_advance", default=False):
-        logic.run_autopilot(new)
-    return new
+    is currently active (a student's game, or the Director's selected game).
+    Serialized per game so simultaneous page loads can't double-advance."""
+    return logic.sync_active_game()
 
 
 def _scroll_top_on_change(state_key, page):
@@ -470,9 +483,15 @@ def instructor_shell():
 # --------------------------------------------------------------------------- #
 # Router
 # --------------------------------------------------------------------------- #
-if st.session_state.role == "student":
-    student_shell()
-elif st.session_state.role == "instructor" and st.session_state.instructor_ok:
-    instructor_shell()
-else:
-    landing()
+# Serve repeated reads within this run from memory (see db.run_memo). Always
+# cleared in `finally`, including when st.rerun()/st.stop() interrupt the run.
+db.begin_request()
+try:
+    if st.session_state.role == "student":
+        student_shell()
+    elif st.session_state.role == "instructor" and st.session_state.instructor_ok:
+        instructor_shell()
+    else:
+        landing()
+finally:
+    db.end_request()

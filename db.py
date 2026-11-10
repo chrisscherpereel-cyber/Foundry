@@ -22,10 +22,96 @@ DB_PATH = os.environ.get(
 # --------------------------------------------------------------------------- #
 # Connection / bootstrap
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# Per-run read cache
+#   A single page render calls the same read helpers hundreds of times (the nav,
+#   to-do list, and gating logic each recompute the round checklist). Within ONE
+#   script run of ONE session, identical reads are served from memory.
+#
+#   Safety rules:
+#     • Scope: thread-local AND only active between begin_request()/end_request(),
+#       which app.py wraps around the script body. Widget callbacks (which run
+#       before the script body) and any code outside a run always hit SQLite.
+#     • Any commit (from any helper) clears the cache, so a run never reads its
+#       own stale data after a write.
+#     • Never shared across sessions, so no data can leak between users.
+#     • Callers receive a copy, so mutating a result can't corrupt the cache.
+# --------------------------------------------------------------------------- #
+# Thread-local per-session context: active game + the per-run read cache.
+_ctx = threading.local()
+_SENTINEL = object()
+
+
+def _clone(v):
+    """Fast deep copy for the JSON-like values these helpers return."""
+    if isinstance(v, dict):
+        return {k: _clone(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return [_clone(x) for x in v]
+    if isinstance(v, set):
+        return set(v)
+    return v
+
+
+def begin_request():
+    """Start a fresh per-run read cache (called at the top of every script run)."""
+    _ctx.cache = {}
+
+
+def end_request():
+    """Drop the per-run cache (called in a finally block at the end of the run)."""
+    _ctx.cache = None
+
+
+def invalidate_run_cache():
+    c = getattr(_ctx, "cache", None)
+    if c:
+        c.clear()
+
+
+def run_memo(fn=None, *, copier=_clone):
+    """Memoize a pure read for the remainder of the current script run."""
+    def deco(f):
+        name = f"{f.__module__}.{f.__qualname__}"
+
+        def wrapper(*args, **kwargs):
+            cache = getattr(_ctx, "cache", None)
+            if cache is None:
+                return f(*args, **kwargs)
+            try:
+                key = (name, getattr(_ctx, "game_id", None), args,
+                       tuple(sorted(kwargs.items())))
+                hit = cache.get(key, _SENTINEL)
+            except TypeError:          # unhashable argument — don't cache
+                return f(*args, **kwargs)
+            if hit is _SENTINEL:
+                hit = f(*args, **kwargs)
+                cache[key] = hit
+            return copier(hit)
+
+        wrapper.__wrapped__ = f
+        wrapper.__name__ = f.__name__
+        wrapper.__doc__ = f.__doc__
+        return wrapper
+    return deco(fn) if fn is not None else deco
+
+
+class _Conn(sqlite3.Connection):
+    """sqlite3 connection that clears the per-run read cache on every commit."""
+
+    def commit(self):
+        super().commit()
+        invalidate_run_cache()
+
+
 def get_conn():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    # timeout: wait up to 30 s for a competing writer instead of failing fast with
+    # "database is locked" when many students save at once.
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30, factory=_Conn)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # Safe with WAL (set in init_db): durable across app crashes, far fewer fsyncs.
+    conn.execute("PRAGMA synchronous = NORMAL")
     return conn
 
 
@@ -346,6 +432,13 @@ def _ensure_column(conn, table, column, decl):
 def init_db():
     conn = get_conn()
     try:
+        # Write-ahead logging lets readers proceed while one session writes, which
+        # sharply reduces lock contention with many concurrent students. The mode is
+        # stored in the database file, so this only needs to run once.
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.OperationalError:
+            pass   # e.g. a filesystem that can't do WAL — fall back to the default
         conn.executescript(SCHEMA)
         _ensure_column(conn, "teams", "hours_per_round", "REAL DEFAULT 60")
         _ensure_column(conn, "teams", "build_pct", "INTEGER DEFAULT 60")
@@ -473,6 +566,7 @@ def init_db():
 # --------------------------------------------------------------------------- #
 # Settings
 # --------------------------------------------------------------------------- #
+@run_memo
 def get_setting(key, default=None):
     conn = get_conn()
     try:
@@ -500,9 +594,8 @@ def set_setting(key, value):
 # An "active game" context (set per request) makes current_round(), list_teams(),
 # and the round-change markers resolve to whichever game is being played/managed.
 # --------------------------------------------------------------------------- #
-# Thread-local so concurrent sessions (each a Streamlit ScriptRunner thread) never
-# clobber each other's active-game context.
-_ctx = threading.local()
+# Thread-local (_ctx, defined above) so concurrent sessions (each a Streamlit
+# ScriptRunner thread) never clobber each other's active-game context.
 
 
 def set_active_game(game_id):
@@ -526,6 +619,7 @@ def create_game(name):
         conn.close()
 
 
+@run_memo
 def list_games():
     conn = get_conn()
     try:
@@ -535,6 +629,7 @@ def list_games():
         conn.close()
 
 
+@run_memo
 def get_game(game_id):
     conn = get_conn()
     try:
@@ -641,6 +736,7 @@ def create_team(name, opportunity="", founder_card=None, capital=2000,
         conn.close()
 
 
+@run_memo
 def list_teams(game_id="__active__"):
     """Teams for a game. With no argument, returns the ACTIVE game's teams (or all
     teams if no game context is set). Pass game_id=None to force all teams."""
@@ -658,6 +754,7 @@ def list_teams(game_id="__active__"):
         conn.close()
 
 
+@run_memo
 def get_team(team_id):
     conn = get_conn()
     try:
@@ -703,11 +800,13 @@ def set_ventures(team_id, ventures):
     update_team(team_id, ventures=_dumps(ventures))
 
 
+@run_memo
 def get_ventures(team_id):
     t = get_team(team_id)
     return _loads(t["ventures"], []) if t else []
 
 
+@run_memo
 def get_founder_card(team_id):
     t = get_team(team_id)
     return _loads(t["founder_card"], {}) if t else {}
@@ -722,22 +821,34 @@ def adjust_resources(team_id, money=0, credits=0, hours=0, kind="adjust",
 
     Returns (ok, message). If allow_negative is False and the change would push
     money/credits/hours below zero, nothing is written.
+
+    The balance check and update run inside one IMMEDIATE transaction, so two
+    teammates spending at the same moment can't overwrite each other's change or
+    both pass the "enough credits?" check against the same stale balance.
     """
-    t = get_team(team_id)
-    if not t:
-        return False, "Team not found."
-    new_money = t["capital"] + money
-    new_credits = t["evidence_credits"] + credits
-    new_hours = t["founder_hours"] + hours
-    if not allow_negative:
-        if new_money < 0:
-            return False, "Not enough capital."
-        if new_credits < 0:
-            return False, "Not enough Evidence Credits."
-        if new_hours < 0:
-            return False, "Not enough founder-hours."
     conn = get_conn()
     try:
+        conn.execute("BEGIN IMMEDIATE")
+        t = conn.execute(
+            "SELECT capital, evidence_credits, founder_hours FROM teams WHERE id=?",
+            (team_id,)).fetchone()
+        if not t:
+            conn.rollback()
+            return False, "Team not found."
+        new_money = t["capital"] + money
+        new_credits = t["evidence_credits"] + credits
+        new_hours = t["founder_hours"] + hours
+        if not allow_negative:
+            msg = None
+            if new_money < 0:
+                msg = "Not enough capital."
+            elif new_credits < 0:
+                msg = "Not enough Evidence Credits."
+            elif new_hours < 0:
+                msg = "Not enough founder-hours."
+            if msg:
+                conn.rollback()
+                return False, msg
         conn.execute(
             "UPDATE teams SET capital=?, evidence_credits=?, founder_hours=? WHERE id=?",
             (new_money, new_credits, new_hours, team_id),
@@ -753,6 +864,23 @@ def adjust_resources(team_id, money=0, credits=0, hours=0, kind="adjust",
         conn.close()
 
 
+_INCREMENTABLE_TEAM_FIELDS = {"spent_build", "spent_train", "spent_other"}
+
+
+def increment_team_field(team_id, field, delta):
+    """Atomically add `delta` to a numeric team column (no read-modify-write race)."""
+    if field not in _INCREMENTABLE_TEAM_FIELDS:
+        raise ValueError(f"not an incrementable field: {field}")
+    conn = get_conn()
+    try:
+        conn.execute(f"UPDATE teams SET {field}=COALESCE({field},0)+? WHERE id=?",
+                     (delta, team_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+@run_memo
 def list_transactions(team_id, limit=100):
     conn = get_conn()
     try:
@@ -795,6 +923,7 @@ def save_canvas(team_id, ctype, data, label="", note=""):
         conn.close()
 
 
+@run_memo
 def list_canvases(team_id, ctype=None):
     conn = get_conn()
     try:
@@ -818,6 +947,7 @@ def list_canvases(team_id, ctype=None):
         conn.close()
 
 
+@run_memo
 def latest_canvas(team_id, ctype):
     cs = list_canvases(team_id, ctype)
     return cs[-1] if cs else None
@@ -841,6 +971,7 @@ def add_assumption(team_id, text, risk_type="Desirability", importance=3,
         conn.close()
 
 
+@run_memo
 def list_assumptions(team_id):
     conn = get_conn()
     try:
@@ -900,6 +1031,7 @@ def add_experiment(team_id, assumption_id, card_type, cost_money, cost_time,
         conn.close()
 
 
+@run_memo
 def list_experiments(team_id):
     conn = get_conn()
     try:
@@ -944,6 +1076,7 @@ def add_evidence(team_id, description, evidence_type, strength, source,
         conn.close()
 
 
+@run_memo
 def list_evidence(team_id):
     conn = get_conn()
     try:
@@ -971,6 +1104,7 @@ def add_event(team_id, round_no, category, text, exposes=""):
         conn.close()
 
 
+@run_memo
 def list_events(team_id=None, include_broadcast=True):
     conn = get_conn()
     try:
@@ -1008,6 +1142,7 @@ def set_event_exploit(event_id, text):
         conn.close()
 
 
+@run_memo
 def get_event(event_id):
     conn = get_conn()
     try:
@@ -1031,6 +1166,7 @@ def add_partner(team_id, name, commitment, evidence, round_no=None):
         conn.close()
 
 
+@run_memo
 def list_partners(team_id):
     conn = get_conn()
     try:
@@ -1063,6 +1199,7 @@ def add_pivot(team_id, data, kind="formal", status="Submitted", round_no=None):
         conn.close()
 
 
+@run_memo
 def list_pivots(team_id=None):
     conn = get_conn()
     try:
@@ -1131,6 +1268,7 @@ def add_reflection(team_id, data):
         conn.close()
 
 
+@run_memo
 def get_reflection(team_id, student_name, round_no):
     conn = get_conn()
     try:
@@ -1143,6 +1281,7 @@ def get_reflection(team_id, student_name, round_no):
         conn.close()
 
 
+@run_memo
 def list_reflections(team_id=None):
     conn = get_conn()
     try:
@@ -1173,6 +1312,7 @@ def set_score(team_id, round_no, dimension, score):
         conn.close()
 
 
+@run_memo
 def latest_scores(team_id):
     """Return {dimension: score} using the most recent entry per dimension."""
     conn = get_conn()
@@ -1206,6 +1346,7 @@ def add_value_prop(team_id, name, description="", evidence_strength=0):
         conn.close()
 
 
+@run_memo
 def list_value_props(team_id):
     conn = get_conn()
     try:
@@ -1255,6 +1396,7 @@ def record_vp_result(team_id, round_no, total_tokens, alignment, prev_alignment,
         conn.close()
 
 
+@run_memo
 def list_vp_results(team_id=None):
     conn = get_conn()
     try:
@@ -1297,6 +1439,7 @@ def add_ai_log(team_id, data):
         conn.close()
 
 
+@run_memo
 def list_ai_logs(team_id=None):
     conn = get_conn()
     try:
@@ -1336,6 +1479,7 @@ def delete_ai_log(log_id):
 # Schedule (round -> topic -> advance datetime). Raw CRUD; higher-level seeding
 # and derived queries live in logic.py.
 # --------------------------------------------------------------------------- #
+@run_memo
 def get_schedule_rows():
     conn = get_conn()
     try:
@@ -1389,6 +1533,7 @@ def delete_schedule_rows_above(max_round):
 # --------------------------------------------------------------------------- #
 # Round topics — many pieces of material per round (topic placed in one round)
 # --------------------------------------------------------------------------- #
+@run_memo
 def get_round_topics():
     conn = get_conn()
     try:
@@ -1455,6 +1600,7 @@ def add_message(team_id, subject, body, round_no=None, sender="Venture Foundry D
         conn.close()
 
 
+@run_memo
 def list_messages(team_id):
     conn = get_conn()
     try:
@@ -1466,6 +1612,7 @@ def list_messages(team_id):
         conn.close()
 
 
+@run_memo
 def unread_count(team_id):
     conn = get_conn()
     try:
@@ -1507,6 +1654,7 @@ def delete_message(msg_id):
 # --------------------------------------------------------------------------- #
 # Team skills
 # --------------------------------------------------------------------------- #
+@run_memo
 def get_team_skills(team_id):
     conn = get_conn()
     try:
@@ -1534,6 +1682,7 @@ def set_skill_level(team_id, skill_key, level):
 # --------------------------------------------------------------------------- #
 # Concept-check answers (per team, per round, per concept)
 # --------------------------------------------------------------------------- #
+@run_memo
 def get_round_answers(team_id, round_no):
     conn = get_conn()
     try:
@@ -1575,6 +1724,7 @@ def set_ack(team_id, key):
         conn.close()
 
 
+@run_memo
 def has_ack(team_id, key):
     conn = get_conn()
     try:
@@ -1607,6 +1757,7 @@ def add_hire(team_id, skill_key, role, kind, boost, per_round, manage_hours=0):
 # --------------------------------------------------------------------------- #
 # Skill XP (learning by doing)
 # --------------------------------------------------------------------------- #
+@run_memo
 def get_skill_xp(team_id, skill_key):
     conn = get_conn()
     try:
@@ -1631,6 +1782,7 @@ def set_skill_xp(team_id, skill_key, xp):
         conn.close()
 
 
+@run_memo
 def list_hires(team_id):
     conn = get_conn()
     try:
@@ -1655,6 +1807,7 @@ def remove_hire(hire_id):
 # Round commitments — a team locks in a round's work; can withdraw before the
 # decision due date. The snapshot records what was complete at commit time.
 # --------------------------------------------------------------------------- #
+@run_memo
 def get_commitment(team_id, round_no):
     conn = get_conn()
     try:
@@ -1687,6 +1840,7 @@ def set_commitment(team_id, round_no, committed, due_at=None, snapshot=None):
         conn.close()
 
 
+@run_memo
 def list_commitments(round_no=None):
     conn = get_conn()
     try:
@@ -1719,6 +1873,7 @@ def save_metrics_snapshot(team_id, round_no, metrics_json):
         conn.close()
 
 
+@run_memo
 def list_metrics_history(team_id):
     conn = get_conn()
     try:
@@ -1734,6 +1889,7 @@ def list_metrics_history(team_id):
 # --------------------------------------------------------------------------- #
 # Badges — earned achievements (first-earned time is recorded for celebrations).
 # --------------------------------------------------------------------------- #
+@run_memo
 def get_earned_badges(team_id):
     conn = get_conn()
     try:
@@ -1776,6 +1932,7 @@ def save_pitch(team_id, game_id, headline, pitch, best_evidence, ask, canvas=Non
         conn.close()
 
 
+@run_memo
 def get_pitch_canvas(team_id):
     """The structured Pitch Canvas dict for a team (block key -> text)."""
     p = get_pitch(team_id)
@@ -1784,6 +1941,7 @@ def get_pitch_canvas(team_id):
     return _loads(p["canvas"], {})
 
 
+@run_memo
 def get_pitch(team_id):
     conn = get_conn()
     try:
@@ -1793,6 +1951,7 @@ def get_pitch(team_id):
         conn.close()
 
 
+@run_memo
 def list_pitches(game_id):
     conn = get_conn()
     try:
@@ -1833,6 +1992,7 @@ def clear_votes(game_id, voter_team_id):
         conn.close()
 
 
+@run_memo
 def votes_by_voter(game_id, voter_team_id):
     conn = get_conn()
     try:
@@ -1844,6 +2004,7 @@ def votes_by_voter(game_id, voter_team_id):
         conn.close()
 
 
+@run_memo
 def vote_tally(game_id):
     conn = get_conn()
     try:
@@ -1874,6 +2035,7 @@ def set_investment(game_id, voter_team_id, votee_team_id, amount):
         conn.close()
 
 
+@run_memo
 def investments_by_voter(game_id, voter_team_id):
     """{votee_team_id: amount} for one voting team."""
     conn = get_conn()
@@ -1886,6 +2048,7 @@ def investments_by_voter(game_id, voter_team_id):
         conn.close()
 
 
+@run_memo
 def investment_tally(game_id):
     """{votee_team_id: total dollars raised} across all voters."""
     conn = get_conn()
@@ -1909,6 +2072,7 @@ def set_venture_name(team_id, name, scores=None):
         conn.close()
 
 
+@run_memo
 def get_venture_name(team_id):
     conn = get_conn()
     try:

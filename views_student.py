@@ -1354,6 +1354,18 @@ def progress(team):
 # --------------------------------------------------------------------------- #
 # Cohort leaderboard (anonymized) + Demo Day
 # --------------------------------------------------------------------------- #
+@st.cache_data(ttl=30, max_entries=64, show_spinner=False)
+def _leaderboard_rows(game_id, metric, rnd):
+    """Cohort standings are identical for every student in a game, so compute them
+    once per game/metric/round and share for up to 30 s, instead of every student
+    recomputing every team's score on every click. `rnd` is part of the key so a
+    round advance is reflected immediately. Only the fields the page displays are
+    kept (no rosters / join codes held in the shared cache)."""
+    rows = logic.leaderboard(game_id, metric)
+    keep = ("id", "name", "display_name", "mascot", "color")
+    return [{**r, "team": {k: r["team"].get(k) for k in keep}} for r in rows]
+
+
 def leaderboard(team):
     st.subheader("🏆 Cohort Leaderboard")
     st.caption("Where your venture stands against the rest of the cohort. Anonymized — you see "
@@ -1361,7 +1373,7 @@ def leaderboard(team):
     metric = st.radio("Rank by", list(logic.LEADERBOARD_METRICS.keys()),
                       format_func=lambda k: logic.LEADERBOARD_METRICS[k], horizontal=True,
                       key="lb_metric")
-    rows = logic.leaderboard(team.get("game_id"), metric)
+    rows = _leaderboard_rows(team.get("game_id"), metric, db.current_round())
     mine = next((r for r in rows if r["team"]["id"] == team["id"]), None)
     if mine:
         c1, c2 = st.columns(2)
