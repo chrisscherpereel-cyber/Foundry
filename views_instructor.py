@@ -1998,22 +1998,38 @@ def backup_reminder():
     if not db.list_teams(None):
         return
     age = backup_age_hours()
-    if age is not None and age < 24:
+    # On Postgres (Neon) data already survives app restarts; a weekly copy is a
+    # safety net. On the local SQLite file it's the only protection, so nag daily.
+    limit = 24 * 7 if db.IS_PG else 24
+    if age is not None and age < limit:
         return
     when = "never" if age is None else f"{age / 24:.0f} day(s) ago"
     c1, c2 = st.columns([4, 1])
-    c1.warning(f"💾 Last backup: **{when}**. Streamlit Community Cloud can erase the game "
-               "database when the app restarts or is updated — download a backup after each class.")
+    if db.IS_PG:
+        c1.info(f"💾 Last backup: **{when}**. Game data is stored in Postgres (Neon) and survives "
+                "app restarts; a weekly downloaded copy is still a good safety net.")
+    else:
+        c1.warning(f"💾 Last backup: **{when}**. Streamlit Community Cloud can erase the game "
+                   "database when the app restarts or is updated — download a backup after each "
+                   "class.")
     c2.button("Back up now", key="home_backup", on_click=_goto_page,
               args=("Backup & Restore",), use_container_width=True)
 
 
 def backup_restore():
     st.subheader("💾 Backup & Restore")
-    st.info("**Why this matters:** the app stores every game in a file on the hosting server. "
-            "Streamlit Community Cloud does **not** keep that file when the app reboots, sleeps "
-            "and is woken, or is redeployed after a code change. Download a backup after every "
-            "class session; if the data ever disappears, restore the latest backup here.")
+    st.caption(f"Storage: **{db.backend_name()}**")
+    if db.IS_PG:
+        st.info("Game data is stored in a Postgres database (Neon), so it survives app restarts "
+                "and redeploys. Backups are a safety net against mistakes (e.g. a reset you "
+                "didn't mean) — and a restore here is also how you move a game into this "
+                "database from a backup file.")
+    else:
+        st.info("**Why this matters:** the app stores every game in a file on the hosting server. "
+                "Streamlit Community Cloud does **not** keep that file when the app reboots, "
+                "sleeps and is woken, or is redeployed after a code change. Download a backup "
+                "after every class session; if the data ever disappears, restore the latest "
+                "backup here. (Set `DATABASE_URL` in the app's Secrets to use Postgres instead.)")
 
     st.write("### ⬇️ Download a backup")
     age = backup_age_hours()

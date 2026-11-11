@@ -20,12 +20,31 @@ import db      # noqa: E402
 import logic   # noqa: E402
 
 
-@pytest.fixture(autouse=True)
-def fresh_db():
+def _reset_storage():
+    if db.IS_PG:            # set DATABASE_URL to run this suite against Postgres
+        conn = db.get_conn()
+        conn.execute("DROP SCHEMA public CASCADE")
+        conn.execute("CREATE SCHEMA public")
+        conn.commit()
+        conn.close()
+        return
     for suffix in ("", "-wal", "-shm"):
         p = db.DB_PATH + suffix
         if os.path.exists(p):
             os.remove(p)
+
+
+def _raw_commit(conn):
+    """Commit WITHOUT the cache-clearing hook (simulates another session's write)."""
+    if db.IS_PG:
+        conn._conn.commit()
+    else:
+        super(type(conn), conn).commit()
+
+
+@pytest.fixture(autouse=True)
+def fresh_db():
+    _reset_storage()
     db.end_request()
     db.init_db()
     gid = db.list_games()[0]["id"]
@@ -40,6 +59,7 @@ def _team(credits=10):
 
 
 # ---- per-run read cache ---------------------------------------------------- #
+@pytest.mark.skipif(db.IS_PG, reason="SQLite-only")
 def test_wal_enabled():
     conn = db.get_conn()
     try:
@@ -53,8 +73,7 @@ def test_no_caching_outside_a_run():
     assert db.get_setting("k") == "1"
     conn = db.get_conn()            # raw write that bypasses helpers, no commit hook
     conn.execute("UPDATE settings SET value='2' WHERE key='k'")
-    sqlite3_commit = super(type(conn), conn).commit
-    sqlite3_commit()
+    _raw_commit(conn)
     conn.close()
     assert db.get_setting("k") == "2"
 
@@ -67,7 +86,7 @@ def test_cache_hits_within_run_and_clears_on_write():
     # seen within the same run (snapshot semantics) ...
     conn = db.get_conn()
     conn.execute("UPDATE settings SET value='2' WHERE key='k'")
-    super(type(conn), conn).commit()
+    _raw_commit(conn)
     conn.close()
     assert db.get_setting("k") == "1"
     # ... but any helper write clears the cache.

@@ -104,7 +104,37 @@ class _Conn(sqlite3.Connection):
         invalidate_run_cache()
 
 
+# --------------------------------------------------------------------------- #
+# Backend selection
+#   DATABASE_URL set (e.g. a Neon Postgres connection string in Streamlit Secrets,
+#   which Streamlit exposes as an environment variable) → Postgres, durable across
+#   app restarts. Otherwise → the local SQLite file (development / fallback).
+# --------------------------------------------------------------------------- #
+def _database_url():
+    url = (os.environ.get("DATABASE_URL") or "").strip()
+    if not url:
+        try:                                  # also read Streamlit secrets directly
+            import streamlit as _st
+            url = str(_st.secrets.get("DATABASE_URL", "") or "").strip()
+        except Exception:                     # no secrets file / not under Streamlit
+            url = ""
+    return url or None
+
+
+DATABASE_URL = _database_url()
+IS_PG = bool(DATABASE_URL)
+
+
+def backend_name():
+    return "Postgres (Neon)" if IS_PG else "SQLite (local file)"
+
+
 def get_conn():
+    if IS_PG:
+        import pgcompat
+        if not pgcompat.SERIAL_TABLES:
+            pgcompat.register_schema(SCHEMA + _EXTRA_TABLES)
+        return pgcompat.PgConn(pgcompat.get_pool(DATABASE_URL), on_commit=invalidate_run_cache)
     # timeout: wait up to 30 s for a competing writer instead of failing fast with
     # "database is locked" when many students save at once.
     conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30, factory=_Conn)
@@ -131,6 +161,12 @@ def _loads(text, default=None):
     except (ValueError, TypeError):
         return default
 
+
+# Tables created inside init_db (not in SCHEMA) that have a serial id.
+_EXTRA_TABLES = """
+CREATE TABLE IF NOT EXISTS partners (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT);
+"""
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings (
@@ -423,15 +459,112 @@ CREATE TABLE IF NOT EXISTS metrics_history (
 """
 
 
-def _ensure_column(conn, table, column, decl):
+def _ensure_column(conn, pg, table, column, decl):
+    if pg:          # translated to ADD COLUMN IF NOT EXISTS
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+        return
     cols = [r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
     if column not in cols:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
+def _create_schema(conn, pg):
+    """All tables and column migrations, for either backend (also used to build a
+    SQLite backup file from a Postgres database)."""
+    conn.executescript(SCHEMA)
+    _ensure_column(conn, pg, "teams", "hours_per_round", "REAL DEFAULT 60")
+    _ensure_column(conn, pg, "teams", "build_pct", "INTEGER DEFAULT 60")
+    _ensure_column(conn, pg, "teams", "effort_hours", "REAL DEFAULT 60")
+    _ensure_column(conn, pg, "teams", "hours_round", "INTEGER DEFAULT 0")
+    _ensure_column(conn, pg, "teams", "build_budget", "REAL DEFAULT 34")
+    _ensure_column(conn, pg, "teams", "spent_build", "REAL DEFAULT 0")
+    _ensure_column(conn, pg, "teams", "spent_train", "REAL DEFAULT 0")
+    _ensure_column(conn, pg, "teams", "spent_other", "REAL DEFAULT 0")
+    _ensure_column(conn, pg, "hires", "manage_hours", "REAL DEFAULT 0")
+    # Evidence: teams justify why a piece of evidence is the strength they chose.
+    _ensure_column(conn, pg, "evidence", "justification", "TEXT")
+    # Experiments: calibration — the team's prediction + confidence before results.
+    _ensure_column(conn, pg, "experiments", "predicted_outcome", "TEXT")
+    _ensure_column(conn, pg, "experiments", "confidence", "INTEGER")
+    # Pivots: lightweight "mini" course-corrections available from early rounds.
+    _ensure_column(conn, pg, "pivots", "kind", "TEXT DEFAULT 'formal'")
+    _ensure_column(conn, pg, "pivots", "round", "INTEGER")
+    _ensure_column(conn, pg, "pivots", "pivot_type", "TEXT")   # Lean Startup pivot taxonomy
+    # Learning Card — structured result capture for an experiment.
+    _ensure_column(conn, pg, "experiments", "learned", "TEXT")     # the insight
+    _ensure_column(conn, pg, "experiments", "decision", "TEXT")    # persevere / pivot / stop / next
+    _ensure_column(conn, pg, "experiments", "signal", "TEXT")      # evidence signal (commitment ladder)
+    # Effectuation — "lemonade": how a team turns a market event into opportunity.
+    _ensure_column(conn, pg, "events", "exploit", "TEXT")
+    # Effectuation — "crazy quilt": self-selected partners who pre-commit.
+    conn.execute("""CREATE TABLE IF NOT EXISTS partners (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        team_id     INTEGER NOT NULL,
+        name        TEXT,
+        commitment  TEXT,
+        evidence    TEXT,
+        round       INTEGER,
+        created_at  TEXT,
+        FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE)""")
+    # AI logs: faster structured capture + link an AI claim to a real test so it
+    # can auto-verify when that test resolves.
+    _ensure_column(conn, pg, "ai_logs", "claim_type", "TEXT")     # fact | prediction | opinion
+    _ensure_column(conn, pg, "ai_logs", "data_source", "TEXT")    # none | cited-unchecked | verified
+    _ensure_column(conn, pg, "ai_logs", "verify_plan", "TEXT")    # how they'll check it
+    _ensure_column(conn, pg, "ai_logs", "assumption_id", "INTEGER")
+    _ensure_column(conn, pg, "ai_logs", "experiment_id", "INTEGER")
+    _ensure_column(conn, pg, "ai_logs", "use_type", "TEXT")   # how the AI was used
+    _ensure_column(conn, pg, "ai_logs", "ai_model", "TEXT")   # which AI tool/model was used
+    # Multi-game: teams belong to a game (cohort); each game advances on its own.
+    _ensure_column(conn, pg, "teams", "game_id", "INTEGER")
+    _ensure_column(conn, pg, "teams", "roster", "TEXT")       # JSON member roster
+    # Team identity — a chosen display name, colour, and mascot.
+    _ensure_column(conn, pg, "teams", "display_name", "TEXT")
+    _ensure_column(conn, pg, "teams", "color", "TEXT")
+    _ensure_column(conn, pg, "teams", "mascot", "TEXT")
+    # Venture naming — the team's chosen product/company name + its scored evaluation.
+    _ensure_column(conn, pg, "teams", "venture_name", "TEXT")
+    _ensure_column(conn, pg, "teams", "venture_name_scores", "TEXT")   # JSON eval
+    conn.execute("""CREATE TABLE IF NOT EXISTS badges (
+        team_id  INTEGER NOT NULL,
+        code     TEXT NOT NULL,
+        earned_at TEXT,
+        PRIMARY KEY (team_id, code),
+        FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE)""")
+    # Demo Day / Evidence Exchange finale — pitches + peer votes.
+    conn.execute("""CREATE TABLE IF NOT EXISTS demo_pitches (
+        team_id       INTEGER PRIMARY KEY,
+        game_id       INTEGER,
+        headline      TEXT,
+        pitch         TEXT,
+        best_evidence TEXT,
+        ask           TEXT,
+        updated_at    TEXT,
+        FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE)""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS demo_votes (
+        game_id       INTEGER NOT NULL,
+        voter_team_id INTEGER NOT NULL,
+        votee_team_id INTEGER NOT NULL,
+        created_at    TEXT,
+        PRIMARY KEY (game_id, voter_team_id, votee_team_id))""")
+    # Demo Day money allocation — dollars a voter invests in each pitch.
+    _ensure_column(conn, pg, "demo_votes", "amount", "INTEGER DEFAULT 0")
+    # Structured Pitch Canvas (JSON of block -> text) behind the Demo Day pitch.
+    _ensure_column(conn, pg, "demo_pitches", "canvas", "TEXT")
+    # Decision Journal: one round-adaptive focus question per entry.
+    _ensure_column(conn, pg, "reflections", "focus_prompt", "TEXT")
+    _ensure_column(conn, pg, "reflections", "focus_answer", "TEXT")
+    # Rotating perspective (lens) taken for this journal entry, + the lens answer.
+    _ensure_column(conn, pg, "reflections", "perspective", "TEXT")
+    _ensure_column(conn, pg, "reflections", "perspective_note", "TEXT")
+
+
 def init_db():
     conn = get_conn()
     try:
+        if IS_PG:
+            # One-time DDL; serialize across server processes with an advisory lock.
+            conn.execute("SELECT pg_advisory_xact_lock(424242)")
         # Write-ahead logging lets readers proceed while one session writes, which
         # sharply reduces lock contention with many concurrent students. The mode is
         # stored in the database file, so this only needs to run once.
@@ -439,92 +572,7 @@ def init_db():
             conn.execute("PRAGMA journal_mode=WAL")
         except sqlite3.OperationalError:
             pass   # e.g. a filesystem that can't do WAL — fall back to the default
-        conn.executescript(SCHEMA)
-        _ensure_column(conn, "teams", "hours_per_round", "REAL DEFAULT 60")
-        _ensure_column(conn, "teams", "build_pct", "INTEGER DEFAULT 60")
-        _ensure_column(conn, "teams", "effort_hours", "REAL DEFAULT 60")
-        _ensure_column(conn, "teams", "hours_round", "INTEGER DEFAULT 0")
-        _ensure_column(conn, "teams", "build_budget", "REAL DEFAULT 34")
-        _ensure_column(conn, "teams", "spent_build", "REAL DEFAULT 0")
-        _ensure_column(conn, "teams", "spent_train", "REAL DEFAULT 0")
-        _ensure_column(conn, "teams", "spent_other", "REAL DEFAULT 0")
-        _ensure_column(conn, "hires", "manage_hours", "REAL DEFAULT 0")
-        # Evidence: teams justify why a piece of evidence is the strength they chose.
-        _ensure_column(conn, "evidence", "justification", "TEXT")
-        # Experiments: calibration — the team's prediction + confidence before results.
-        _ensure_column(conn, "experiments", "predicted_outcome", "TEXT")
-        _ensure_column(conn, "experiments", "confidence", "INTEGER")
-        # Pivots: lightweight "mini" course-corrections available from early rounds.
-        _ensure_column(conn, "pivots", "kind", "TEXT DEFAULT 'formal'")
-        _ensure_column(conn, "pivots", "round", "INTEGER")
-        _ensure_column(conn, "pivots", "pivot_type", "TEXT")   # Lean Startup pivot taxonomy
-        # Learning Card — structured result capture for an experiment.
-        _ensure_column(conn, "experiments", "learned", "TEXT")     # the insight
-        _ensure_column(conn, "experiments", "decision", "TEXT")    # persevere / pivot / stop / next
-        _ensure_column(conn, "experiments", "signal", "TEXT")      # evidence signal (commitment ladder)
-        # Effectuation — "lemonade": how a team turns a market event into opportunity.
-        _ensure_column(conn, "events", "exploit", "TEXT")
-        # Effectuation — "crazy quilt": self-selected partners who pre-commit.
-        conn.execute("""CREATE TABLE IF NOT EXISTS partners (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            team_id     INTEGER NOT NULL,
-            name        TEXT,
-            commitment  TEXT,
-            evidence    TEXT,
-            round       INTEGER,
-            created_at  TEXT,
-            FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE)""")
-        # AI logs: faster structured capture + link an AI claim to a real test so it
-        # can auto-verify when that test resolves.
-        _ensure_column(conn, "ai_logs", "claim_type", "TEXT")     # fact | prediction | opinion
-        _ensure_column(conn, "ai_logs", "data_source", "TEXT")    # none | cited-unchecked | verified
-        _ensure_column(conn, "ai_logs", "verify_plan", "TEXT")    # how they'll check it
-        _ensure_column(conn, "ai_logs", "assumption_id", "INTEGER")
-        _ensure_column(conn, "ai_logs", "experiment_id", "INTEGER")
-        _ensure_column(conn, "ai_logs", "use_type", "TEXT")   # how the AI was used
-        _ensure_column(conn, "ai_logs", "ai_model", "TEXT")   # which AI tool/model was used
-        # Multi-game: teams belong to a game (cohort); each game advances on its own.
-        _ensure_column(conn, "teams", "game_id", "INTEGER")
-        _ensure_column(conn, "teams", "roster", "TEXT")       # JSON member roster
-        # Team identity — a chosen display name, colour, and mascot.
-        _ensure_column(conn, "teams", "display_name", "TEXT")
-        _ensure_column(conn, "teams", "color", "TEXT")
-        _ensure_column(conn, "teams", "mascot", "TEXT")
-        # Venture naming — the team's chosen product/company name + its scored evaluation.
-        _ensure_column(conn, "teams", "venture_name", "TEXT")
-        _ensure_column(conn, "teams", "venture_name_scores", "TEXT")   # JSON eval
-        conn.execute("""CREATE TABLE IF NOT EXISTS badges (
-            team_id  INTEGER NOT NULL,
-            code     TEXT NOT NULL,
-            earned_at TEXT,
-            PRIMARY KEY (team_id, code),
-            FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE)""")
-        # Demo Day / Evidence Exchange finale — pitches + peer votes.
-        conn.execute("""CREATE TABLE IF NOT EXISTS demo_pitches (
-            team_id       INTEGER PRIMARY KEY,
-            game_id       INTEGER,
-            headline      TEXT,
-            pitch         TEXT,
-            best_evidence TEXT,
-            ask           TEXT,
-            updated_at    TEXT,
-            FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE)""")
-        conn.execute("""CREATE TABLE IF NOT EXISTS demo_votes (
-            game_id       INTEGER NOT NULL,
-            voter_team_id INTEGER NOT NULL,
-            votee_team_id INTEGER NOT NULL,
-            created_at    TEXT,
-            PRIMARY KEY (game_id, voter_team_id, votee_team_id))""")
-        # Demo Day money allocation — dollars a voter invests in each pitch.
-        _ensure_column(conn, "demo_votes", "amount", "INTEGER DEFAULT 0")
-        # Structured Pitch Canvas (JSON of block -> text) behind the Demo Day pitch.
-        _ensure_column(conn, "demo_pitches", "canvas", "TEXT")
-        # Decision Journal: one round-adaptive focus question per entry.
-        _ensure_column(conn, "reflections", "focus_prompt", "TEXT")
-        _ensure_column(conn, "reflections", "focus_answer", "TEXT")
-        # Rotating perspective (lens) taken for this journal entry, + the lens answer.
-        _ensure_column(conn, "reflections", "perspective", "TEXT")
-        _ensure_column(conn, "reflections", "perspective_note", "TEXT")
+        _create_schema(conn, IS_PG)
         # Seed default settings once.
         cur = conn.execute("SELECT value FROM settings WHERE key='current_round'")
         if cur.fetchone() is None:
@@ -727,7 +775,8 @@ def create_team(name, opportunity="", founder_card=None, capital=2000,
         levels = content.card_skill_levels((founder_card or {}).get("name", ""))
         for skill_key, level in levels.items():
             conn.execute(
-                "INSERT OR REPLACE INTO team_skills(team_id, skill_key, level) VALUES(?,?,?)",
+                "INSERT INTO team_skills(team_id, skill_key, level) VALUES(?,?,?) "
+                "ON CONFLICT(team_id, skill_key) DO UPDATE SET level=excluded.level",
                 (team_id, skill_key, level),
             )
         conn.commit()
@@ -830,7 +879,8 @@ def adjust_resources(team_id, money=0, credits=0, hours=0, kind="adjust",
     try:
         conn.execute("BEGIN IMMEDIATE")
         t = conn.execute(
-            "SELECT capital, evidence_credits, founder_hours FROM teams WHERE id=?",
+            "SELECT capital, evidence_credits, founder_hours FROM teams WHERE id=?"
+            + (" FOR UPDATE" if IS_PG else ""),          # row lock on Postgres
             (team_id,)).fetchone()
         if not t:
             conn.rollback()
@@ -925,6 +975,10 @@ def save_canvas(team_id, ctype, data, label="", note=""):
 
 @run_memo
 def list_canvases(team_id, ctype=None):
+    # Inside a page render, answer per-type lookups from the team's full canvas list
+    # (one query instead of one per canvas type — matters on a network database).
+    if ctype and getattr(_ctx, "cache", None) is not None:
+        return [c for c in list_canvases(team_id) if c["ctype"] == ctype]
     conn = get_conn()
     try:
         if ctype:
@@ -1683,7 +1737,24 @@ def set_skill_level(team_id, skill_key, level):
 # Concept-check answers (per team, per round, per concept)
 # --------------------------------------------------------------------------- #
 @run_memo
+def _round_answers_by_round(team_id):
+    conn = get_conn()
+    try:
+        out = {}
+        for r in conn.execute(
+                "SELECT round, concept, answer FROM round_answers WHERE team_id=?",
+                (team_id,)).fetchall():
+            out.setdefault(r["round"], {})[r["concept"]] = r["answer"]
+        return out
+    finally:
+        conn.close()
+
+
+@run_memo
 def get_round_answers(team_id, round_no):
+    # In a page render, every prior round's answers are needed: fetch all at once.
+    if getattr(_ctx, "cache", None) is not None:
+        return dict(_round_answers_by_round(team_id).get(round_no, {}))
     conn = get_conn()
     try:
         rows = conn.execute(
@@ -1725,7 +1796,19 @@ def set_ack(team_id, key):
 
 
 @run_memo
+def _ack_keys(team_id):
+    conn = get_conn()
+    try:
+        return {r["key"] for r in conn.execute(
+            "SELECT key FROM acknowledgments WHERE team_id=?", (team_id,)).fetchall()}
+    finally:
+        conn.close()
+
+
+@run_memo
 def has_ack(team_id, key):
+    if getattr(_ctx, "cache", None) is not None:
+        return key in _ack_keys(team_id)
     conn = get_conn()
     try:
         row = conn.execute(
@@ -2097,7 +2180,11 @@ _REQUIRED_TABLES = {"settings", "games", "teams"}
 
 
 def backup_bytes():
-    """A consistent snapshot of the whole database as bytes (a .db file)."""
+    """A consistent snapshot of the whole database as bytes (a .db file).
+    On Postgres the data is exported into the same SQLite file format, so one
+    backup file works with either backend (and moves data between them)."""
+    if IS_PG:
+        return _pg_backup_bytes()
     import tempfile
     fd, tmp = tempfile.mkstemp(suffix=".db")
     os.close(fd)
@@ -2155,6 +2242,8 @@ def restore_from_bytes(data):
     ok, msg, _ = validate_backup(data)
     if not ok:
         return False, msg
+    if IS_PG:
+        return _pg_restore(data)
     fd, tmp = tempfile.mkstemp(suffix=".db")
     os.close(fd)
     try:
@@ -2171,4 +2260,132 @@ def restore_from_bytes(data):
         os.remove(tmp)
     invalidate_run_cache()
     init_db()                         # apply any schema migrations to older backups
+    return True, "Restored."
+
+
+# ---- Postgres ⇄ SQLite-file backups --------------------------------------- #
+_PARENT_TABLES = ("settings", "games", "teams")      # load before child tables
+
+
+def _sqlite_tables(sconn):
+    return [r[0] for r in sconn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+
+
+def _pg_columns(conn):
+    """{table: {column: data_type}} for the app's Postgres schema."""
+    out = {}
+    for r in conn.execute(
+            "SELECT table_name, column_name, data_type FROM information_schema.columns "
+            "WHERE table_schema = current_schema()").fetchall():
+        out.setdefault(r["table_name"], {})[r["column_name"]] = r["data_type"]
+    return out
+
+
+def _pg_backup_bytes():
+    import tempfile
+    fd = tempfile.mkdtemp()
+    tmp = os.path.join(fd, "backup.db")
+    try:
+        sconn = sqlite3.connect(tmp)
+        sconn.row_factory = sqlite3.Row
+        _create_schema(sconn, False)
+        pconn = get_conn()
+        try:
+            pg_cols = _pg_columns(pconn)
+            for table in _sqlite_tables(sconn):
+                if table not in pg_cols:
+                    continue
+                s_cols = [r["name"] for r in sconn.execute(f"PRAGMA table_info({table})")]
+                cols = [c for c in s_cols if c in pg_cols[table]]
+                col_sql = ", ".join(cols)
+                rows = pconn.execute(f"SELECT {col_sql} FROM {table}").fetchall()
+                if rows:
+                    sconn.executemany(
+                        f"INSERT INTO {table}({col_sql}) VALUES({', '.join('?' * len(cols))})",
+                        [tuple(r[c] for c in cols) for r in rows])
+        finally:
+            pconn.close()
+        sconn.commit()
+        sconn.close()
+        with open(tmp, "rb") as fh:
+            return fh.read()
+    finally:
+        import shutil
+        shutil.rmtree(fd, ignore_errors=True)
+
+
+def _coerce(value, pg_type):
+    """SQLite is loosely typed; make a value acceptable to the Postgres column."""
+    if value is None:
+        return None
+    if pg_type in ("integer", "bigint", "smallint"):
+        if isinstance(value, (int, float)):
+            return int(value)
+        txt = str(value).strip()
+        if not txt:
+            return None
+        try:
+            return int(float(txt))
+        except ValueError:
+            return None
+    if pg_type in ("double precision", "real", "numeric"):
+        if isinstance(value, (int, float)):
+            return float(value)
+        try:
+            return float(str(value).strip()) if str(value).strip() else None
+        except ValueError:
+            return None
+    if isinstance(value, bytes):
+        return value.decode("utf-8", "replace")
+    return value if isinstance(value, str) else str(value)
+
+
+def _pg_restore(data):
+    """Load a SQLite backup into Postgres in ONE transaction (all or nothing)."""
+    import tempfile
+    tdir = tempfile.mkdtemp()
+    tmp = os.path.join(tdir, "restore.db")
+    try:
+        with open(tmp, "wb") as fh:
+            fh.write(data)
+        sconn = sqlite3.connect(tmp)
+        sconn.row_factory = sqlite3.Row
+        pconn = get_conn()
+        try:
+            pg_cols = _pg_columns(pconn)
+            src_tables = [t for t in _sqlite_tables(sconn) if t in pg_cols]
+            ordered = ([t for t in _PARENT_TABLES if t in src_tables]
+                       + [t for t in src_tables if t not in _PARENT_TABLES])
+            app_tables = ", ".join(sorted(pg_cols))
+            pconn.execute(f"TRUNCATE {app_tables} RESTART IDENTITY CASCADE")
+            for table in ordered:
+                s_cols = [r["name"] for r in sconn.execute(f"PRAGMA table_info({table})")]
+                cols = [c for c in s_cols if c in pg_cols[table]]
+                rows = sconn.execute(f"SELECT {', '.join(cols)} FROM {table}").fetchall()
+                if not rows:
+                    continue
+                types = [pg_cols[table][c] for c in cols]
+                pconn.executemany(
+                    f"INSERT INTO {table}({', '.join(cols)}) "
+                    f"VALUES({', '.join('?' * len(cols))}) ON CONFLICT DO NOTHING",
+                    [tuple(_coerce(r[i], types[i]) for i in range(len(cols))) for r in rows])
+            for table, cols in pg_cols.items():   # keep serial ids ahead of restored rows
+                if "id" in cols and cols["id"] == "integer":
+                    pconn.execute(
+                        f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), "
+                        f"COALESCE((SELECT MAX(id) FROM {table}), 1), "
+                        f"(SELECT MAX(id) FROM {table}) IS NOT NULL)")
+            pconn.commit()
+        except Exception as exc:                   # noqa: BLE001
+            pconn.rollback()
+            return False, f"Restore failed; nothing was changed. ({exc})"
+        finally:
+            pconn.close()
+            sconn.close()
+    finally:
+        import shutil
+        shutil.rmtree(tdir, ignore_errors=True)
+    invalidate_run_cache()
+    init_db()
     return True, "Restored."

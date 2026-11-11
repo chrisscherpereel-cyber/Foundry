@@ -132,9 +132,17 @@ renders and 16 Director pages were all clean. It appears to be an artifact of ru
 
 ## E. Remaining constraints
 
-- **Durability.** Backups are manual. For automatic durability, move the database to a free hosted
-  service such as Turso/libSQL (SQLite-compatible, the smallest change), Supabase, or Neon. That
-  needs an account you create; the code change is then modest.
+- **Durability: addressed by the Neon Postgres backend.** Set `DATABASE_URL` and the app stores
+  everything in Postgres via `pgcompat.py`. Measured against a local Postgres 16:
+  - All 16 tests pass.
+  - All 34 student page renders are text-identical to the original SQLite app, and all 16 Director
+    pages are error-free.
+  - A SQLite → Postgres → SQLite backup round-trip is lossless.
+  - About 22–25 queries per click, down from 34, after batching per-team reads.
+
+  On Neon, each query is a network round trip. Expect each click to take roughly 22–25 × the
+  Streamlit-to-Neon latency longer, and a ~0.5–1 s first query after Neon has suspended an idle
+  compute. **Not yet measured against Neon itself.**
 - **Platform.**
   - Community Cloud's documented limits are roughly 0.078–2 CPU cores and 690 MB–2.7 GB RAM, and can
     change without notice.
