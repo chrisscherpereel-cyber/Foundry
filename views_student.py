@@ -168,32 +168,36 @@ def _pareto_time_chart(cats):
     if not data:
         st.caption("No time to show yet — set an allocation.")
         return
-    try:
-        import pandas as pd
-        import altair as alt
-    except Exception:
-        # Fallback: simple table if charting libs are unavailable.
-        st.table([{"Activity": l, "Hours": h} for l, h in
-                  sorted(data, key=lambda x: -x[1])])
-        return
-    df = pd.DataFrame(data, columns=["Activity", "Hours"]).sort_values(
-        "Hours", ascending=False).reset_index(drop=True)
-    df["Label"] = df["Activity"].apply(lambda s: s if len(s) <= 14 else s[:13] + "…")
-    total = df["Hours"].sum()
-    df["Cumulative %"] = (df["Hours"].cumsum() / total * 100).round(0)
-    order = list(df["Label"])
-    base = alt.Chart(df).encode(
-        x=alt.X("Label:N", sort=order, axis=alt.Axis(labelAngle=0, title=None)))
-    bars = base.mark_bar(color="#2b6cb0").encode(
-        y=alt.Y("Hours:Q", title="Hours / week"),
-        tooltip=["Activity", "Hours"])
-    line = base.mark_line(point=True, color="#f2a938").encode(
-        y=alt.Y("Cumulative %:Q", axis=alt.Axis(title="Cumulative %"),
-                scale=alt.Scale(domain=[0, 100])),
-        tooltip=["Activity", "Cumulative %"])
-    chart = (bars + line).resolve_scale(y="independent").properties(
-        height=280, title="Founder & team hours this round")
-    st.altair_chart(chart, use_container_width=True)
+    rows = sorted(data, key=lambda x: -x[1])
+    total = sum(h for _, h in rows) or 1
+    order, recs, cum = [], [], 0.0
+    for l, h in rows:
+        cum += h
+        lab = l if len(l) <= 14 else l[:13] + "…"
+        order.append(lab)
+        recs.append({"Activity": l, "Label": lab, "Hours": h,
+                     "Cumulative %": round(cum / total * 100)})
+    # Same Pareto (bars + cumulative-% line, independent axes) as before, sent as a
+    # Vega-Lite spec instead of building Altair objects on the server every rerun.
+    x = {"field": "Label", "type": "nominal", "sort": order,
+         "axis": {"labelAngle": 0, "title": None}}
+    st.vega_lite_chart({
+        "data": {"values": recs},
+        "title": "Founder & team hours this round",
+        "height": 280,
+        "layer": [
+            {"mark": {"type": "bar", "color": "#2b6cb0"},
+             "encoding": {"x": x, "y": {"field": "Hours", "type": "quantitative",
+                                        "title": "Hours / week"},
+                          "tooltip": [{"field": "Activity"}, {"field": "Hours"}]}},
+            {"mark": {"type": "line", "point": True, "color": "#f2a938"},
+             "encoding": {"x": x, "y": {"field": "Cumulative %", "type": "quantitative",
+                                        "title": "Cumulative %",
+                                        "scale": {"domain": [0, 100]}},
+                          "tooltip": [{"field": "Activity"}, {"field": "Cumulative %"}]}},
+        ],
+        "resolve": {"scale": {"y": "independent"}},
+    }, use_container_width=True)
 
 
 def _shade_row(label, done, must_update):
@@ -1264,6 +1268,28 @@ def dashboard(team):
 # --------------------------------------------------------------------------- #
 # Progress — the team's own learning trend, so it can self-regulate
 # --------------------------------------------------------------------------- #
+
+def _trend_chart(df, cols):
+    """A multi-line chart like st.line_chart, but from a small Vega-Lite spec.
+    st.line_chart builds an Altair object tree server-side (~70 ms per chart on
+    every rerun); passing the spec directly renders the same chart in the browser
+    for a fraction of the server CPU."""
+    data = df[cols].reset_index()
+    st.vega_lite_chart(data, {
+        "transform": [{"fold": cols, "as": ["Metric", "Value"]}],
+        "mark": {"type": "line", "point": True},
+        "encoding": {
+            "x": {"field": "Round", "type": "quantitative", "axis": {"tickMinStep": 1}},
+            "y": {"field": "Value", "type": "quantitative", "title": None},
+            "color": {"field": "Metric", "type": "nominal", "title": None,
+                      "legend": {"orient": "bottom"}},
+            "tooltip": [{"field": "Round", "type": "quantitative"},
+                        {"field": "Metric", "type": "nominal"},
+                        {"field": "Value", "type": "quantitative"}],
+        },
+    }, use_container_width=True)
+
+
 def progress(team):
     st.subheader("📈 Learning Progress")
     _why("Progress")
@@ -1342,11 +1368,11 @@ def progress(team):
         import pandas as pd
         df = pd.DataFrame(rows).set_index("Round")
         st.caption("Evidence quality — behavioral should outgrow opinion over time:")
-        st.line_chart(df[["Behavioral evidence", "Opinion-only"]])
+        _trend_chart(df, ["Behavioral evidence", "Opinion-only"])
         st.caption("How proven your model is — test coverage and evidence coverage should climb:")
-        st.line_chart(df[["Test coverage %", "Evidence coverage %"]])
+        _trend_chart(df, ["Test coverage %", "Evidence coverage %"])
         st.caption("Evidence-driven course corrections (changing your mind is a strength):")
-        st.line_chart(df[["Course corrections"]])
+        _trend_chart(df, ["Course corrections"])
     except Exception:
         st.table(rows)
 
@@ -1354,6 +1380,18 @@ def progress(team):
 # --------------------------------------------------------------------------- #
 # Cohort leaderboard (anonymized) + Demo Day
 # --------------------------------------------------------------------------- #
+@st.cache_data(ttl=30, max_entries=64, show_spinner=False)
+def _leaderboard_rows(game_id, metric, rnd):
+    """Cohort standings are identical for every student in a game, so compute them
+    once per game/metric/round and share for up to 30 s, instead of every student
+    recomputing every team's score on every click. `rnd` is part of the key so a
+    round advance is reflected immediately. Only the fields the page displays are
+    kept (no rosters / join codes held in the shared cache)."""
+    rows = logic.leaderboard(game_id, metric)
+    keep = ("id", "name", "display_name", "mascot", "color")
+    return [{**r, "team": {k: r["team"].get(k) for k in keep}} for r in rows]
+
+
 def leaderboard(team):
     st.subheader("🏆 Cohort Leaderboard")
     st.caption("Where your venture stands against the rest of the cohort. Anonymized — you see "
@@ -1361,7 +1399,7 @@ def leaderboard(team):
     metric = st.radio("Rank by", list(logic.LEADERBOARD_METRICS.keys()),
                       format_func=lambda k: logic.LEADERBOARD_METRICS[k], horizontal=True,
                       key="lb_metric")
-    rows = logic.leaderboard(team.get("game_id"), metric)
+    rows = _leaderboard_rows(team.get("game_id"), metric, db.current_round())
     mine = next((r for r in rows if r["team"]["id"] == team["id"]), None)
     if mine:
         c1, c2 = st.columns(2)

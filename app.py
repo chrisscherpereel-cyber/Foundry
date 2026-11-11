@@ -28,29 +28,42 @@ import views_instructor as vi
 
 # Browser-tab favicon: the Molten V logo (falls back to an emoji if unavailable).
 _ICON_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "favicon.png")
-_PAGE_ICON = "🏭"
-if os.path.exists(_ICON_PATH):
-    try:
-        from PIL import Image
-        _PAGE_ICON = Image.open(_ICON_PATH)
-    except Exception:
-        _PAGE_ICON = _ICON_PATH
+
+
+@st.cache_resource(show_spinner=False)
+def _page_icon():
+    """Decode the favicon once per server process instead of on every rerun."""
+    if os.path.exists(_ICON_PATH):
+        try:
+            from PIL import Image
+            img = Image.open(_ICON_PATH)
+            img.load()
+            return img
+        except Exception:
+            return _ICON_PATH
+    return "🏭"
+
 
 st.set_page_config(page_title="Venture Foundry — From hunch to hard evidence",
-                   page_icon=_PAGE_ICON, layout="wide")
+                   page_icon=_page_icon(), layout="wide")
 
-db.init_db()
+
+@st.cache_resource(show_spinner=False)
+def _init_db_once():
+    """Create/migrate the schema once per server process (it used to run on every
+    rerun of every session: ~20 statements + a dozen PRAGMA lookups per click)."""
+    db.init_db()
+    return True
+
+
+_init_db_once()
 
 
 def _sync_active_game():
     """Apply date-based auto-advance and round-change side effects for whichever game
-    is currently active (a student's game, or the Director's selected game)."""
-    prev = db.current_round()
-    new = logic.maybe_auto_advance()
-    logic.on_round_change(new)
-    if new != prev and logic.auto_flag("auto_run_on_advance", default=False):
-        logic.run_autopilot(new)
-    return new
+    is currently active (a student's game, or the Director's selected game).
+    Serialized per game so simultaneous page loads can't double-advance."""
+    return logic.sync_active_game()
 
 
 def _scroll_top_on_change(state_key, page):
@@ -89,6 +102,23 @@ def logout():
     st.session_state.role = None
     st.session_state.team_id = None
     st.session_state.instructor_ok = False
+    st.session_state.pop("director_viewing", None)
+
+
+def _director_view_team(team_id):
+    """Director previews the game exactly as a team sees it (replaces the old
+    landing-page picker, which let anyone enter any team without a join code)."""
+    st.session_state.role = "student"
+    st.session_state.team_id = team_id
+    st.session_state["director_viewing"] = True
+    st.session_state.pop("student_page", None)
+
+
+def _back_to_director():
+    st.session_state.role = "instructor"
+    st.session_state.team_id = None
+    st.session_state.instructor_ok = True
+    st.session_state.pop("director_viewing", None)
 
 
 # --------------------------------------------------------------------------- #
@@ -117,25 +147,28 @@ def landing():
                 st.rerun()
             else:
                 st.error("No team found with that code.")
-        teams = db.list_teams()
-        if teams:
-            with st.expander("Instructor demo: pick a team directly"):
-                t = st.selectbox("Team", teams, format_func=lambda t: f"{t['name']} ({t['join_code']})")
-                if st.button("Enter selected team"):
-                    st.session_state.role = "student"
-                    st.session_state.team_id = t["id"]
-                    st.rerun()
 
     with tab_instructor:
         pin = st.text_input("Instructor PIN", type="password", key="pin_input")
         if st.button("Open Director Console", type="primary"):
-            if pin == db.get_setting("instructor_pin", "foundry"):
+            # Slow down PIN guessing: after 5 misses in this session, wait 30 s.
+            import time as _time
+            fails = st.session_state.get("_pin_fails", 0)
+            wait = st.session_state.get("_pin_lock_until", 0) - _time.time()
+            if wait > 0:
+                st.error(f"Too many attempts — try again in {int(wait) + 1} s.")
+            elif logic.check_pin(pin):
+                st.session_state["_pin_fails"] = 0
                 st.session_state.role = "instructor"
                 st.session_state.instructor_ok = True
                 st.rerun()
             else:
+                fails += 1
+                st.session_state["_pin_fails"] = fails
+                if fails >= 5:
+                    st.session_state["_pin_lock_until"] = _time.time() + 30
+                    st.session_state["_pin_fails"] = 0
                 st.error("Incorrect PIN.")
-        st.caption("Default PIN is `foundry` — change it after first login.")
 
 
 # --------------------------------------------------------------------------- #
@@ -358,6 +391,9 @@ def student_shell():
                        "the Decision Journal — see its full description there.")
             for pr in content.PERSPECTIVES:
                 st.caption(f"{pr['icon']} **{pr['name']}** — {pr['lens']}")
+        if st.session_state.get("director_viewing") and st.session_state.get("instructor_ok"):
+            st.button("↩️ Back to Director console", on_click=_back_to_director,
+                      type="primary", use_container_width=True)
         st.button("Log out", on_click=logout)
 
     _scroll_top_on_change("_student_page", page)
@@ -385,12 +421,13 @@ INSTRUCTOR_PAGES = {
     "Round Scores": vi.round_scores,
     "Misconception Radar": vi.misconception_radar,
     "Demo Day": vi.demo_day_admin,
+    "Backup & Restore": vi.backup_restore,
 }
 
 # Grouped navigation so a first-time director isn't faced with 14 flat pages.
 INSTRUCTOR_NAV_GROUPS = {
     "⚙️ Set up (once)": ["Games", "Team Setup", "Schedule & Timing"],
-    "▶️ Run each round": ["Round Control", "Round Scores", "Auto-Director"],
+    "▶️ Run each round": ["Round Control", "Round Scores", "Auto-Director", "Backup & Restore"],
     "📊 See how it's going": ["Cohort Overview", "Misconception Radar", "Demo Day"],
 }
 INSTRUCTOR_NAV_ADVANCED = ["Resources", "Market Events", "VP Auction",
@@ -451,6 +488,15 @@ def instructor_shell():
         st.divider()
         page = _instructor_nav()
         st.divider()
+        teams_here = db.list_teams()
+        if teams_here:
+            with st.expander("👀 View the game as a team"):
+                vt = st.selectbox("Team", [t["id"] for t in teams_here], key="view_as_team",
+                                  format_func=lambda i: next(
+                                      f"{t['name']} ({t['join_code']})"
+                                      for t in teams_here if t["id"] == i))
+                st.button("Open team view", on_click=_director_view_team, args=(vt,),
+                          use_container_width=True)
         with st.expander("Director's questions"):
             for q in [
                 "What must be true for this to work?",
@@ -470,9 +516,15 @@ def instructor_shell():
 # --------------------------------------------------------------------------- #
 # Router
 # --------------------------------------------------------------------------- #
-if st.session_state.role == "student":
-    student_shell()
-elif st.session_state.role == "instructor" and st.session_state.instructor_ok:
-    instructor_shell()
-else:
-    landing()
+# Serve repeated reads within this run from memory (see db.run_memo). Always
+# cleared in `finally`, including when st.rerun()/st.stop() interrupt the run.
+db.begin_request()
+try:
+    if st.session_state.role == "student":
+        student_shell()
+    elif st.session_state.role == "instructor" and st.session_state.instructor_ok:
+        instructor_shell()
+    else:
+        landing()
+finally:
+    db.end_request()

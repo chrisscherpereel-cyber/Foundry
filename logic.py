@@ -5,8 +5,11 @@ and the editable schedule (round -> topic -> advance time).
 Kept free of Streamlit so it can be unit-tested and reused.
 """
 
+import hmac
 import json
+import os
 import re
+import threading
 from datetime import datetime, timezone
 
 import db
@@ -23,6 +26,13 @@ def total_rounds():
         return content.DEFAULT_TOTAL_ROUNDS
 
 
+def _copy_schedule(rows):
+    # Same shape the original returned: fresh outer dicts/lists, shared (read-only)
+    # curriculum topic dicts from content.py — avoids deep-copying the curriculum.
+    return [dict(r, topics=list(r["topics"])) for r in rows]
+
+
+@db.run_memo(copier=_copy_schedule)
 def get_schedule():
     """Return the ordered schedule: each round with its LIST of topic dicts.
 
@@ -518,6 +528,7 @@ def concept_progress(team_id, rnd):
 
 
 # ---- Carry-forward of unfinished prior work -------------------------------- #
+@db.run_memo
 def outstanding_prior(team_id, rnd):
     """Incomplete deliverables AND unanswered concept-checks from earlier rounds."""
     out = []
@@ -539,6 +550,7 @@ def outstanding_prior(team_id, rnd):
     return out
 
 
+@db.run_memo
 def round_checklist(team_id, rnd):
     """Everything a team must finish THIS round: this round's decisions and concept
     questions, plus any unfinished work carried over from earlier rounds."""
@@ -737,9 +749,21 @@ def skill_progress(team_id, skill_key):
     return lvl, xp, cost_to_next(lvl)
 
 
+# Skill XP/level updates are read-compute-write; serialize them (one server
+# process) and read live values, so two teammates training at once can't
+# overwrite each other's progress.
+_SKILL_LOCK = threading.RLock()
+
+
 def add_skill_progress(team_id, skill_key, eff_hours):
     """Bank effective-hours of progress toward a skill; level up while it covers the
     cost. Partial progress is kept (never wasted). Returns levels gained."""
+    with _SKILL_LOCK:
+        db.invalidate_run_cache()
+        return _add_skill_progress(team_id, skill_key, eff_hours)
+
+
+def _add_skill_progress(team_id, skill_key, eff_hours):
     xp = db.get_skill_xp(team_id, skill_key) + eff_hours
     lvl = db.get_team_skills(team_id).get(skill_key, 0)
     gained = 0
@@ -787,6 +811,12 @@ def untrain_skill(team_id, skill_key):
     for this skill, freeing that effort back up; otherwise revert one trained level
     (down to the founder card's starting level). Learning-by-doing and starting
     levels are kept."""
+    with _SKILL_LOCK:
+        db.invalidate_run_cache()
+        return _untrain_skill(team_id, skill_key)
+
+
+def _untrain_skill(team_id, skill_key):
     lvl = db.get_team_skills(team_id).get(skill_key, 0)
     xp = db.get_skill_xp(team_id, skill_key)
     base = _card_base_level(team_id, skill_key)
@@ -910,6 +940,7 @@ def effort_color(effort):
 
 def set_build_budget(team_id, hours):
     """Commit business-development hours this round (capped so effort ≤ 80)."""
+    db.invalidate_run_cache()        # read the live spent_build, not this run's copy
     team = db.get_team(team_id)
     hours = int(max(0, min(max_build(team), hours)))
     spent_b = int(team.get("spent_build") or 0)
@@ -932,8 +963,7 @@ def sync_round_hours(team):
 
 def _add_usage(team_id, field, hours):
     """Increment a per-round hours-usage counter (spent_build/train/other)."""
-    cur = db.get_team(team_id).get(field) or 0
-    db.update_team(team_id, **{field: cur + hours})
+    db.increment_team_field(team_id, field, hours)
 
 
 def hours_breakdown(team):
@@ -1024,7 +1054,49 @@ def _parse_dt(text):
         return None
 
 
+# --------------------------------------------------------------------------- #
+# Round-advance serialization
+#   Streamlit runs every session in one process, so a per-game lock stops several
+#   sessions that load at the same moment (e.g. a whole class right after a
+#   scheduled advance time) from each advancing the round, double-charging
+#   salaries, double-applying learning, or double-sending round mail.
+# --------------------------------------------------------------------------- #
+_ADVANCE_LOCKS = {}
+_ADVANCE_LOCKS_GUARD = threading.Lock()
+
+
+def advance_lock(game_id):
+    with _ADVANCE_LOCKS_GUARD:
+        return _ADVANCE_LOCKS.setdefault(game_id, threading.RLock())
+
+
+def sync_active_game():
+    """Apply date-based auto-advance and round-change side effects for the active
+    game, exactly once across concurrent sessions. If another session is already
+    advancing this game, don't wait (that work can include slow AI mail) — just
+    render with the current round; the next interaction picks up the result."""
+    lock = advance_lock(db.active_game_id())
+    if not lock.acquire(blocking=False):
+        return db.current_round()
+    try:
+        db.invalidate_run_cache()          # re-read round/marker inside the lock
+        prev = db.current_round()
+        new = maybe_auto_advance()
+        on_round_change(new)
+        if new != prev and auto_flag("auto_run_on_advance", default=False):
+            run_autopilot(new)
+        return new
+    finally:
+        lock.release()
+
+
 def director_advance(target):
+    with advance_lock(db.active_game_id()):
+        db.invalidate_run_cache()
+        return _director_advance(target)
+
+
+def _director_advance(target):
     """The single, canonical 'advance the cohort' action used by both Round Control
     and the Start-here home. Advancing from the current round to `target`:
       • moves the round and applies learning / resets hours / charges salaries,
@@ -1903,7 +1975,9 @@ def commit_streak(team_id):
 def founder_level(team_id):
     """A team 'founder level' that grows with skill (training + learning by doing).
     Returns (level, total_effective_skill)."""
-    total = sum(effective_skill(team_id, k) for k in content.FOUNDER_SKILL_KEYS)
+    skills, boosts = db.get_team_skills(team_id), hire_boost(team_id)   # read once
+    total = sum(effective_skill(team_id, k, skills, boosts)
+                for k in content.FOUNDER_SKILL_KEYS)
     return 1 + int(total // 6), total
 
 
@@ -3485,11 +3559,60 @@ def deliver_round_mail(round_no, teams=None, force=False):
     if mail_auto("mp") and ai_available():
         flag = _mail_sent_flag(gid, round_no, "mp")
         if force or db.get_setting(flag, "0") != "1":
-            for t in teams:
-                if send_managing_partner_note(t["id"], round_no):
-                    summary["mp"] += 1
-            db.set_setting(flag, "1")
+            db.set_setting(flag, "1")      # claim first, so a re-run can't double-send
+            summary["mp"] = send_managing_partner_notes_async(
+                [t["id"] for t in teams], round_no, gid)
     return summary
+
+
+# ---- Managing Partner notes in the background ------------------------------- #
+#   Each note is an AI request that can take up to the 25 s timeout, and they ran
+#   one team after another inside whichever page load triggered the advance — a
+#   student could wait minutes. Now they're sent from a background thread; the
+#   notes simply appear in each team's Inbox as they're written.
+_MP_JOBS = set()
+_MP_JOBS_GUARD = threading.Lock()
+
+
+def _mp_job_key(game_id, round_no):
+    return f"mp_job:{game_id}:{round_no}"
+
+
+def mp_job_status(game_id, round_no):
+    """'' if no job, else e.g. 'sending 3/10' or 'done 10/10'."""
+    return db.get_setting(_mp_job_key(game_id, round_no), "") or ""
+
+
+def send_managing_partner_notes_async(team_ids, round_no, game_id):
+    """Queue Managing Partner notes for these teams. Returns how many were queued
+    (0 if a job for this game+round is already running)."""
+    job = (game_id, round_no)
+    with _MP_JOBS_GUARD:
+        if job in _MP_JOBS or not team_ids:
+            return 0
+        _MP_JOBS.add(job)
+    key = _mp_job_key(game_id, round_no)
+    total = len(team_ids)
+
+    def run():
+        db.set_active_game(game_id)    # thread-local game context for this worker
+        sent = 0
+        try:
+            db.set_setting(key, f"sending 0/{total}")
+            for i, tid in enumerate(team_ids, 1):
+                try:
+                    if send_managing_partner_note(tid, round_no):
+                        sent += 1
+                except Exception:      # noqa: BLE001 — one failure mustn't stop the rest
+                    pass
+                db.set_setting(key, f"sending {i}/{total}")
+            db.set_setting(key, f"done {sent}/{total}")
+        finally:
+            with _MP_JOBS_GUARD:
+                _MP_JOBS.discard(job)
+
+    threading.Thread(target=run, name=f"mp-notes-{game_id}-{round_no}", daemon=True).start()
+    return total
 
 
 # ---- Automation settings & batch run -------------------------------------- #
@@ -3543,3 +3666,30 @@ def run_autopilot(round_no=None, teams=None):
     # Round mail is delivered separately by deliver_round_mail() on advance, so the
     # Foundry/Managing-Partner switches are the single source of truth for mail.
     return summary
+
+
+# --------------------------------------------------------------------------- #
+# Director PIN
+#   An Instructor PIN set as a deployment secret (root-level `VF_INSTRUCTOR_PIN`
+#   in Streamlit Cloud "Secrets", which Streamlit also exposes as an environment
+#   variable) takes precedence and survives database loss. Otherwise the PIN
+#   stored in the database is used (default "foundry" until changed).
+# --------------------------------------------------------------------------- #
+DEFAULT_PIN = "foundry"
+
+
+def pin_from_secret():
+    return (os.environ.get("VF_INSTRUCTOR_PIN") or "").strip() or None
+
+
+def instructor_pin():
+    return pin_from_secret() or db.get_setting("instructor_pin", DEFAULT_PIN)
+
+
+def pin_is_default():
+    return instructor_pin() == DEFAULT_PIN
+
+
+def check_pin(candidate):
+    """Constant-time comparison so response timing doesn't leak the PIN."""
+    return hmac.compare_digest(str(candidate or "").encode(), str(instructor_pin()).encode())

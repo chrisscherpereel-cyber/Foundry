@@ -158,8 +158,17 @@ def _mail_settings():
         if s2.button(f"📨 Send Managing Partner notes · Round {rnd}", disabled=mp_disabled,
                      on_click=_keep_open, args=(_ok,),
                      help=None if logic.ai_available() else "Configure an AI key first."):
-            sent = sum(1 for t in teams if logic.send_managing_partner_note(t["id"], rnd))
-            st.success(f"Managing Partner notes sent to {sent} team(s).")
+            queued = logic.send_managing_partner_notes_async(
+                [t["id"] for t in teams], rnd, db.active_game_id())
+            if queued:
+                st.success(f"Writing Managing Partner notes for {queued} team(s) in the "
+                           "background — they'll appear in each team's Inbox over the next "
+                           "few minutes.")
+            else:
+                st.info("Managing Partner notes for this round are already being written.")
+        _mp = logic.mp_job_status(db.active_game_id(), rnd)
+        if _mp:
+            st.caption(f"Managing Partner notes · Round {rnd}: {_mp}")
 
 
 def _pre_advance_checklist_ui(round_no):
@@ -266,6 +275,11 @@ def director_home():
     cur = db.current_round()
     game = db.get_game(gid)
     st.markdown(f"#### {game['name'] if game else 'Your game'} · the week-to-week control center")
+    backup_reminder()
+    if logic.pin_is_default():
+        st.error("🔓 The Director PIN is still the default. Anyone who knows it can open this "
+                 "console — change it under **Round Control → Console settings**, or set "
+                 "`VF_INSTRUCTOR_PIN` in the app's Secrets.")
 
     # ---- Status at a glance --------------------------------------------------
     committed = sum(1 for t in teams
@@ -295,7 +309,9 @@ def director_home():
             msg = f"Advanced to Round {res['to']}."
             mail = res["mail"]
             if mail["foundry"] or mail["mp"]:
-                msg += f" Auto-sent {mail['foundry']} Foundry + {mail['mp']} Managing Partner note(s)."
+                msg += (f" Auto-sent {mail['foundry']} Foundry note(s)"
+                        + (f"; writing {mail['mp']} Managing Partner note(s) in the background."
+                           if mail["mp"] else "."))
             if res["autopilot"]:
                 msg += " Auto-Director applied."
             st.success(msg)
@@ -745,7 +761,8 @@ def round_control():
                 if mail["foundry"]:
                     bits.append(f"{mail['foundry']} Foundry note(s)")
                 if mail["mp"]:
-                    bits.append(f"{mail['mp']} Managing Partner note(s)")
+                    bits.append(f"{mail['mp']} Managing Partner note(s) (being written in the "
+                                "background)")
                 msg += " Auto-sent " + " and ".join(bits) + "."
             if res["autopilot"]:
                 msg += " Auto-Director applied."
@@ -789,13 +806,18 @@ def round_control():
     st.markdown("### ⚙️ Console settings")
     c2a, c2b = st.columns(2)
     with c2a:
-        pin = st.text_input(
-            "Instructor PIN (change)", value=db.get_setting("instructor_pin", "foundry"),
-            help="The password for this Director console. Change it from the default 'foundry' "
-                 "so students can't open it.")
-        if st.button("Update PIN", help="Save the new instructor PIN."):
-            db.set_setting("instructor_pin", pin)
-            st.success("PIN updated.")
+        if logic.pin_from_secret():
+            st.caption("🔐 The Instructor PIN is set by the app's deployment secret "
+                       "(`VF_INSTRUCTOR_PIN`). Change it in Streamlit Cloud → Settings → Secrets.")
+        else:
+            pin = st.text_input(
+                "New Instructor PIN", value="", type="password", key="new_pin",
+                help="The password for this Director console (at least 6 characters). For a PIN "
+                     "that survives a database reset, set VF_INSTRUCTOR_PIN in the app's Secrets.")
+            if st.button("Update PIN", help="Save the new instructor PIN.",
+                         disabled=len(pin.strip()) < 6):
+                db.set_setting("instructor_pin", pin.strip())
+                st.success("PIN updated.")
     with c2b:
         strict = st.checkbox(
             "Strict round mode", value=logic.strict_round_mode(),
@@ -1084,6 +1106,17 @@ def demo_day_admin():
 # --------------------------------------------------------------------------- #
 # Team setup
 # --------------------------------------------------------------------------- #
+
+@st.cache_data(show_spinner=False)
+def _roster_template_bytes():
+    """The example roster workbook never changes — build it once per process instead
+    of re-generating it with openpyxl on every rerun of Team Setup."""
+    import io
+    tb = io.BytesIO()
+    logic.roster_template_workbook().save(tb)
+    return tb.getvalue()
+
+
 def team_setup():
     st.subheader("👥 Team Setup")
     _guide(
@@ -1119,11 +1152,8 @@ def team_setup():
     st.caption("Upload a class contact list. Each **Class + Section** becomes its own game, "
                "each **Team** number becomes a team, and the members are saved to that team's "
                "roster. Names in your file are only used as the roster.")
-    import io
-    tb = io.BytesIO()
-    logic.roster_template_workbook().save(tb)
     st.download_button(
-        "⬇️ Download example template (.xlsx)", tb.getvalue(), "roster_template.xlsx",
+        "⬇️ Download example template (.xlsx)", _roster_template_bytes(), "roster_template.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         help="Columns: FirstName, LastName, PrimaryEmail, Class, Section, Team.")
 
@@ -1941,3 +1971,84 @@ def overview():
                      f"{(l['ai_output'] or '')[:70]}")
             if l["audit_i"]:
                 st.caption(f"   Test designed: {l['audit_i'][:80]}")
+
+
+# --------------------------------------------------------------------------- #
+# Backup & restore — protects the semester against Community Cloud reboots.
+# --------------------------------------------------------------------------- #
+def _mark_backup_taken():
+    db.set_setting("last_backup_at", db.now())
+
+
+def backup_age_hours():
+    """Hours since the last backup download, or None if never."""
+    from datetime import datetime, timezone
+    raw = db.get_setting("last_backup_at")
+    if not raw:
+        return None
+    try:
+        then = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return (datetime.now(timezone.utc) - then).total_seconds() / 3600
+
+
+def backup_reminder():
+    """Nudge on the home page when there is data worth protecting and no recent backup."""
+    if not db.list_teams(None):
+        return
+    age = backup_age_hours()
+    if age is not None and age < 24:
+        return
+    when = "never" if age is None else f"{age / 24:.0f} day(s) ago"
+    c1, c2 = st.columns([4, 1])
+    c1.warning(f"💾 Last backup: **{when}**. Streamlit Community Cloud can erase the game "
+               "database when the app restarts or is updated — download a backup after each class.")
+    c2.button("Back up now", key="home_backup", on_click=_goto_page,
+              args=("Backup & Restore",), use_container_width=True)
+
+
+def backup_restore():
+    st.subheader("💾 Backup & Restore")
+    st.info("**Why this matters:** the app stores every game in a file on the hosting server. "
+            "Streamlit Community Cloud does **not** keep that file when the app reboots, sleeps "
+            "and is woken, or is redeployed after a code change. Download a backup after every "
+            "class session; if the data ever disappears, restore the latest backup here.")
+
+    st.write("### ⬇️ Download a backup")
+    age = backup_age_hours()
+    st.caption("Last backup: " + ("never" if age is None else
+                                  f"{age:.1f} hour(s) ago" if age < 48 else f"{age / 24:.0f} days ago"))
+    stamp = db.now()[:16].replace(":", "").replace("T", "_")
+    st.download_button(
+        "⬇️ Download full backup (.db)", db.backup_bytes(),
+        file_name=f"venture_foundry_backup_{stamp}.db",
+        mime="application/vnd.sqlite3", type="primary",
+        on_click=_mark_backup_taken,
+        help="Every game, team, canvas, piece of evidence, message, and setting.")
+    st.caption("The backup contains student names and work — store it somewhere private "
+               "(e.g. your university OneDrive), not a public folder.")
+
+    st.divider()
+    st.write("### ⬆️ Restore from a backup")
+    st.warning("Restoring **replaces all current data** (every game and team) with the backup's "
+               "contents. Download a fresh backup first if there's anything you might want to keep.")
+    up = st.file_uploader("Backup file (.db)", type=["db", "sqlite", "sqlite3"],
+                          key="restore_upload")
+    if up is not None:
+        data = up.getvalue()
+        ok, msg, summ = db.validate_backup(data)
+        if not ok:
+            st.error(msg)
+            return
+        st.success(f"Valid backup: {summ['games']} game(s), {summ['teams']} team(s).")
+        sure = st.checkbox("I understand this replaces all current data.", key="restore_sure")
+        if st.button("⬆️ Restore this backup", type="primary", disabled=not sure):
+            ok, msg = db.restore_from_bytes(data)
+            if ok:
+                st.cache_data.clear()       # drop shared caches built from the old data
+                st.session_state.pop("active_game_id", None)
+                st.success("Backup restored.")
+                st.rerun()
+            else:
+                st.error(msg)

@@ -18,8 +18,9 @@ first run and holds all cohort state (survives restarts).
 
 ## Two roles
 
-**🎩 Venture Foundry Director (instructor)** — log in with the PIN (default
-`foundry`, change it under *Round Control*):
+**🎩 Venture Foundry Director (instructor)** — log in with the Instructor PIN
+(set `VF_INSTRUCTOR_PIN` in the app's Secrets, or change it under *Round Control*;
+the console warns until the default has been changed):
 
 - **🏠 Start here (default landing)** — a control center built for first-time directors so the console never feels like 14 loose pages. On a brand-new game it shows a **four-step setup wizard** (name the game → add teams by roster import or quick balanced setup → set rounds/schedule → choose automation). Once teams exist it becomes a **week-to-week dashboard**: round status at a glance, the **before-you-advance checklist**, a one-click **Advance** button, the **"Run it for me"** automation switch, and shortcut buttons to the pages you actually use. Everything else is reachable but out of the way.
 - **Grouped navigation** — the sidebar is organized into **⚙️ Set up (once)**, **▶️ Run each round**, and **📊 See how it's going**, with the five rarely-needed manual tools (Resources, Market Events, VP Auction, Pivot Committee, Dashboard Scoring) tucked behind a **🔧 Advanced / manual** expander and clearly labeled *optional*.
@@ -182,6 +183,9 @@ evidence ladder, dashboard dimensions, semester map, and the **difficulty preset
 
 ## Notes
 
-- Default instructor PIN is `foundry`; change it immediately under *Round Control*.
+- **Instructor PIN:** set a root-level `VF_INSTRUCTOR_PIN = "..."` in Streamlit Cloud → *Settings → Secrets* (survives database loss), or change it under *Round Control*. Until then the console shows a warning. Repeated wrong PINs are rate-limited.
+- **Back up after every class.** On Streamlit Community Cloud the local `venture_foundry.db` is **not** preserved when the app reboots, sleeps, or is redeployed. Use **Director → Backup & Restore** to download a full backup and to restore it if data disappears; the Start-here page reminds you when the last backup is over a day old. For fully automatic durability, move the database to a free hosted service (e.g. Turso/libSQL, Supabase, Neon) — this needs an account of your own.
+- **Previewing a team:** Directors open any team from the sidebar (**👀 View the game as a team**) and return with **↩️ Back to Director console**. Students can only enter with their join code.
+- **Performance:** see `PERFORMANCE_AUDIT.md` for the concurrency optimizations and measurements; run `pytest -q tests/` after changes.
 - The app is designed as the "enhanced application version" from the design doc. AI role-players (customer / investor / partner / regulator agents) are not included — they can be layered on later via a connector.
-- Move `venture_foundry.db` to back up or reset a cohort. Set `VF_DB_PATH` to relocate it.
+- Set `VF_DB_PATH` to relocate the database file.
