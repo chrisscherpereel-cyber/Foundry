@@ -102,6 +102,23 @@ def logout():
     st.session_state.role = None
     st.session_state.team_id = None
     st.session_state.instructor_ok = False
+    st.session_state.pop("director_viewing", None)
+
+
+def _director_view_team(team_id):
+    """Director previews the game exactly as a team sees it (replaces the old
+    landing-page picker, which let anyone enter any team without a join code)."""
+    st.session_state.role = "student"
+    st.session_state.team_id = team_id
+    st.session_state["director_viewing"] = True
+    st.session_state.pop("student_page", None)
+
+
+def _back_to_director():
+    st.session_state.role = "instructor"
+    st.session_state.team_id = None
+    st.session_state.instructor_ok = True
+    st.session_state.pop("director_viewing", None)
 
 
 # --------------------------------------------------------------------------- #
@@ -130,25 +147,28 @@ def landing():
                 st.rerun()
             else:
                 st.error("No team found with that code.")
-        teams = db.list_teams()
-        if teams:
-            with st.expander("Instructor demo: pick a team directly"):
-                t = st.selectbox("Team", teams, format_func=lambda t: f"{t['name']} ({t['join_code']})")
-                if st.button("Enter selected team"):
-                    st.session_state.role = "student"
-                    st.session_state.team_id = t["id"]
-                    st.rerun()
 
     with tab_instructor:
         pin = st.text_input("Instructor PIN", type="password", key="pin_input")
         if st.button("Open Director Console", type="primary"):
-            if pin == db.get_setting("instructor_pin", "foundry"):
+            # Slow down PIN guessing: after 5 misses in this session, wait 30 s.
+            import time as _time
+            fails = st.session_state.get("_pin_fails", 0)
+            wait = st.session_state.get("_pin_lock_until", 0) - _time.time()
+            if wait > 0:
+                st.error(f"Too many attempts — try again in {int(wait) + 1} s.")
+            elif logic.check_pin(pin):
+                st.session_state["_pin_fails"] = 0
                 st.session_state.role = "instructor"
                 st.session_state.instructor_ok = True
                 st.rerun()
             else:
+                fails += 1
+                st.session_state["_pin_fails"] = fails
+                if fails >= 5:
+                    st.session_state["_pin_lock_until"] = _time.time() + 30
+                    st.session_state["_pin_fails"] = 0
                 st.error("Incorrect PIN.")
-        st.caption("Default PIN is `foundry` — change it after first login.")
 
 
 # --------------------------------------------------------------------------- #
@@ -371,6 +391,9 @@ def student_shell():
                        "the Decision Journal — see its full description there.")
             for pr in content.PERSPECTIVES:
                 st.caption(f"{pr['icon']} **{pr['name']}** — {pr['lens']}")
+        if st.session_state.get("director_viewing") and st.session_state.get("instructor_ok"):
+            st.button("↩️ Back to Director console", on_click=_back_to_director,
+                      type="primary", use_container_width=True)
         st.button("Log out", on_click=logout)
 
     _scroll_top_on_change("_student_page", page)
@@ -398,12 +421,13 @@ INSTRUCTOR_PAGES = {
     "Round Scores": vi.round_scores,
     "Misconception Radar": vi.misconception_radar,
     "Demo Day": vi.demo_day_admin,
+    "Backup & Restore": vi.backup_restore,
 }
 
 # Grouped navigation so a first-time director isn't faced with 14 flat pages.
 INSTRUCTOR_NAV_GROUPS = {
     "⚙️ Set up (once)": ["Games", "Team Setup", "Schedule & Timing"],
-    "▶️ Run each round": ["Round Control", "Round Scores", "Auto-Director"],
+    "▶️ Run each round": ["Round Control", "Round Scores", "Auto-Director", "Backup & Restore"],
     "📊 See how it's going": ["Cohort Overview", "Misconception Radar", "Demo Day"],
 }
 INSTRUCTOR_NAV_ADVANCED = ["Resources", "Market Events", "VP Auction",
@@ -464,6 +488,15 @@ def instructor_shell():
         st.divider()
         page = _instructor_nav()
         st.divider()
+        teams_here = db.list_teams()
+        if teams_here:
+            with st.expander("👀 View the game as a team"):
+                vt = st.selectbox("Team", [t["id"] for t in teams_here], key="view_as_team",
+                                  format_func=lambda i: next(
+                                      f"{t['name']} ({t['join_code']})"
+                                      for t in teams_here if t["id"] == i))
+                st.button("Open team view", on_click=_director_view_team, args=(vt,),
+                          use_container_width=True)
         with st.expander("Director's questions"):
             for q in [
                 "What must be true for this to work?",

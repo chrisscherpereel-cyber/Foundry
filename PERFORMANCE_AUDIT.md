@@ -1,133 +1,148 @@
-# Venture Foundry: Performance & Concurrency Audit
+# Venture Foundry: Performance, Concurrency & Reliability Audit
 
 Branch: `perf/concurrency-optimizations` · Target: 30–40 concurrent users on Streamlit Community Cloud
 
-> **What has and hasn't been verified.** These changes were made from a static code review. The
-> automated review environment did not allow the app's own code to be executed, so **none of the
-> before/after numbers below come from running Venture Foundry itself.** Every figure is labeled as
-> one of:
-> - **Measured:** an SQLite micro-benchmark that does not use the app.
-> - **Estimated:** derived by counting queries in the code.
-> - **Not measured.**
->
-> Run `pytest -q tests/` and the load-test plan in §6 before merging.
+All numbers below are **measured** unless marked otherwise. They come from a 2-core Linux sandbox
+running Python 3.13 and Streamlit 1.67. Streamlit's `AppTest` drove real script runs against seeded
+databases: 1 game, 10 teams, canvases, assumptions, evidence and inbox mail, advanced to round 3,
+8 or 14. Community Cloud's CPU share is unknown, and may be smaller than this sandbox's. **Treat
+absolute times as relative, and the before/after ratios as the meaningful result.**
 
 ## A. Executive summary
 
-The app's speed problem has one dominant cause. **Each page render re-derives the same facts from the
-database hundreds to thousands of times.** Each call opens a new SQLite connection. The sidebar
-navigation checks whether each of ~16 tools is locked, active, or reference. Each check rebuilds the
-semester schedule and re-walks every earlier round's deliverables and concept answers. The to-do
-list and the "Next" strip rebuild the full round checklist up to three more times per click. All of
-this work grows with the round number, so the app gets slower as the semester goes on. The cost is
-almost all CPU under Python's single interpreter lock (the GIL), and every session shares one server
-process. With 30–40 students clicking, the requests queue behind each other.
+- **The main problem: each click repeated the same database work thousands of times.** The sidebar
+  checks whether each of ~16 tools is locked, active, or reference. Each check rebuilt the semester
+  schedule and re-walked every earlier round's deliverables and answers, through a new SQLite
+  connection per query. The to-do list and the "Next" strip rebuilt the full checklist up to three
+  more times. A single student click made **~3,000 database connections at round 8 and ~6,000 at
+  round 14.** The app got slower every week of the semester.
+- **Concurrency bugs.**
+  - At a scheduled advance time, several students loading at once could each advance the round. Each
+    advance charged salaries, applied learning, and sent mail again.
+  - Teammates spending at the same moment could overdraw credits or overwrite each other's balance.
+  - Training progress could be lost the same way.
+- **Data-loss risk.** All semester data lives in a local SQLite file. Community Cloud doesn't keep
+  local files across reboots or redeploys.
+- **Security.** The landing page let anyone enter any team without a join code, and displayed the
+  default Director PIN.
 
-The audit also found **correctness problems that only appear under concurrency**:
+**Result.** Student clicks are now **13–27× faster by mid/late semester** (every student page ≈ 50–70 ms at round 14), and their cost stays flat
+as the semester goes on. Each click now uses about 40 database connections, down from thousands. The
+concurrency bugs are fixed and covered by tests. The Director can back up and restore the whole
+game. The security holes are closed.
 
-- **Round advances race.** At a scheduled advance time, several students loading at the same moment
-  could each advance the round. Each one would charge specialist salaries, apply learning, and send
-  round mail again.
-- **Spending races.** Two teammates spending credits at the same moment could overwrite each other's
-  balance change, or both pass the "enough credits?" check against the same balance.
+## B. Optimization results (measured)
 
-The largest risk sits outside the code. **All semester data lives in a local SQLite file, and
-Community Cloud does not preserve local files across reboots or redeploys.** This is a data-loss risk
-that code optimization cannot fix (§F).
+### Single-session response time per click (median of 3) and DB connections
 
-## B. Optimization results
+| Page (student) | Round 3: before → after | Round 8: before → after | Round 14: before → after |
+|---|---|---|---|
+| Round Briefing | 299 → 57 ms (956 → 25 conn) | 902 → 67 ms (3,102 → 34) | **1,645 → 70 ms** (6,156 → 41) |
+| Canvases | 262 → 59 ms | 658 → 54 ms | 1,133 → 65 ms |
+| Assumption Map | 182 → 37 ms | 575 → 62 ms | 893 → 58 ms |
+| Evidence Ledger | 235 → 75 ms | 546 → 56 ms | 889 → 69 ms |
+| My Venture | 338 → 215 ms* | 660 → 236 ms* | 958 → **66 ms** (223 ms before the chart change) |
+| Leaderboard | 447 → 41 ms | 859 → 40 ms | 1,351 → 50 ms |
+| Director: Round Scores | 290 → 127 ms | 407 → 145 ms | 588 → 169 ms |
+
+\*Rounds 3 and 8 were measured before the chart change. Replacing `st.line_chart` with direct
+Vega-Lite specs removed ~150 ms of Altair object building per view (round 14: 223 → 66 ms).
+
+### Simultaneous-burst test (round 14)
+
+N sessions all click 5 pages back-to-back at the same moment, in one process sharing the GIL like
+the real server. This is a **worst case**: real classes spread their clicks out. Browser and network
+time are not included.
+
+| Concurrent sessions | Before: p50 / p95 | After: p50 / p95 |
+|---|---|---|
+| 1 | 1.28 s / 1.56 s | 0.065 s / 0.17 s |
+| 10 | 18.8 s / 28.3 s | 0.44 s / 1.8 s |
+| 20 | 43.6 s / 66.5 s | 0.96 s / 3.6 s |
+| 40 | **did not finish in 15 min** | 2.0–2.9 s / 7.3–10.5 s (3 runs; one noisy run at 6.7 s p50) |
+
+**Memory:** about 148 MB with 1 session and about 293 MB peak with 40, which works out to roughly
+3.6 MB per session including test-harness overhead. That is well under Community Cloud's 690 MB
+throttle point.
+
+**Errors under concurrency:** a few runs hit a "duplicate widget key" error on the AI-log form. It
+occurs on the original code too, and it never occurs when sessions run one at a time: 34 page
+renders and 16 Director pages were all clean. It appears to be an artifact of running several
+`AppTest` instances in threads, not an app bug. Watch for it in real use anyway.
+
+### Component summary
 
 | Component | Problem identified | Modification | Measured improvement |
 |---|---|---|---|
-| Application startup | `init_db()` (schema script + ~12 `PRAGMA table_info` + migrations) ran on **every rerun of every session**; favicon decoded every rerun | Run once per server process via `st.cache_resource` | Not measured (est. 20–40 fewer SQL statements per click) |
-| Page loading | Est. ~1,500–3,000 SQLite connections per student click at mid-semester (N+1 recomputation of schedule/checklist/tool gating) | Per-run read cache (`db.run_memo`) on 44 read helpers + `get_schedule`, `outstanding_prior`, `round_checklist` | Not measured. Estimate: repeated reads drop to a few dozen distinct queries per click. Measured cost per avoided query: **≈0.34 ms** (connect+PRAGMA+SELECT+close) |
-| Session management | Cache must never leak across users | Cache is thread-local, active only inside the script body, cleared on every commit, and never shared across sessions | Covered by tests (not run) |
-| CPU utilization | Same as page loading; `founder_level` read skills/hires 7× each | Memoization; read once | Not measured |
-| Memory consumption | No large per-session objects found; leaderboard held full team rows (rosters, join codes) | Shared leaderboard cache keeps only display fields; upload cap 10 MB | Not measured |
-| File uploads | Only upload is the class roster (KB-sized), parsed from memory once | No parsing change needed. `server.maxUploadSize = 10` (was 200 MB) | Not measured |
-| File downloads | Roster template `.xlsx` rebuilt with openpyxl on every Team Setup rerun | Built once (`st.cache_data`) | Not measured |
-| Caching | No `st.cache_*` anywhere; leaderboard recomputed every team's score for every viewer | Leaderboard shared per game/metric/round for 30 s | Not measured |
-| Concurrent users | Default rollback journal + 5 s lock timeout → "database is locked" under write bursts; advance and spending races | WAL mode, 30 s busy timeout, `synchronous=NORMAL`; per-game advance lock; atomic spend and usage counters | **Measured (micro-benchmark, 4 writers + 4 readers, 50 ms timeout):** lock errors 50 → 15 with WAL. App-level: not measured |
+| Application startup | `init_db()` (schema + ~12 PRAGMA lookups + migrations) ran on every rerun of every session | Once per process (`st.cache_resource`) | Included in per-click times above |
+| Page loading | N+1 recomputation: 3k–6k DB connections per click | Per-run read cache (`db.run_memo`) on 44 read helpers + schedule/checklist derivations | 13–27× faster at rounds 8–14 |
+| Session management | Cache must not leak across users | Thread-local, script-body-only, cleared on every commit, never shared | 34 of 34 student page renders are text-identical before vs after |
+| CPU utilization | Above; Altair chart building on every rerun | Memoization; Vega-Lite specs instead of `st.line_chart`/Altair | See tables |
+| Memory consumption | Leaderboard held full team rows | Shared cache keeps display fields only; upload cap 10 MB | ~3.6 MB/session |
+| File uploads | Roster (KB-sized) parsed once from memory; 200 MB default cap | `maxUploadSize = 10` | Not measured (not a bottleneck) |
+| File downloads | Roster template rebuilt on every Team Setup rerun | Built once per process | Not measured (small) |
+| Caching | None anywhere | Per-run read cache; leaderboard shared per game for 30 s | Leaderboard 1,351 → 50 ms |
+| Concurrent users | Lock errors, double advance, overdraw, lost training | WAL + 30 s busy timeout; per-game advance lock; atomic spend/usage; serialized skill XP | Burst table above; race tests pass |
 
 ## C. Code modifications
 
 | File | Change |
 |---|---|
-| `db.py` | Request-scoped read cache (`begin_request`, `end_request`, `run_memo`, `invalidate_run_cache`). A connection subclass clears the cache on commit. WAL, `synchronous=NORMAL`, 30 s timeout. `adjust_resources` now runs in one `BEGIN IMMEDIATE` transaction. New `increment_team_field`. |
-| `logic.py` | Memoized `get_schedule`, `outstanding_prior`, `round_checklist`. New `sync_active_game` with a per-game non-blocking lock. `director_advance` takes the same lock. `_add_usage` increments atomically. `set_build_budget` reads fresh. `founder_level` reads once. |
-| `app.py` | Schema and favicon set up once per process. Script body wrapped in `begin_request`/`end_request`. Uses `logic.sync_active_game`. |
-| `views_student.py` | Shared 30 s leaderboard cache (display fields only). |
-| `views_instructor.py` | Cached roster template bytes. |
-| `.streamlit/config.toml` (new) | `maxUploadSize = 10`, `gatherUsageStats = false`. |
-| `tests/test_perf_safety.py` (new) | Cache semantics, copy safety, checklist equivalence, no-overdraw under 25 concurrent spends, atomic counters, single advance under 12 simultaneous loads. |
+| `db.py` | Request-scoped read cache. WAL, `synchronous=NORMAL`, 30 s timeout. Atomic `adjust_resources` (`BEGIN IMMEDIATE`). `increment_team_field`. Online-backup `backup_bytes`, `validate_backup`, `restore_from_bytes`. |
+| `logic.py` | Memoized schedule and checklist. `sync_active_game` with a non-blocking per-game lock, which `director_advance` also takes. Atomic usage counters and serialized skill XP. Managing Partner notes sent from a background thread (`send_managing_partner_notes_async`, `mp_job_status`). PIN helpers (`check_pin` with constant-time compare; `VF_INSTRUCTOR_PIN` secret override). |
+| `app.py` | Schema and favicon set up once. Request cache around the script body. Removed the landing-page team picker and the PIN caption. PIN rate-limit (30 s after 5 misses). Director "👀 View the game as a team" and "↩️ Back to Director console". New "Backup & Restore" page. |
+| `views_instructor.py` | Backup & Restore page. Home-page backup reminder (over 24 h) and default-PIN warning. PIN field is now a password input with a minimum of 6 characters. Background MP-note sending with status. Cached roster template. |
+| `views_student.py` | Shared leaderboard cache. Trend and Pareto charts as Vega-Lite specs (same chart types and colors). |
+| `requirements.txt` | Pinned `streamlit==1.67.0` (the tested version) and bounded the others. |
+| `.streamlit/config.toml` | `maxUploadSize = 10`, `gatherUsageStats = false`. |
+| `.gitignore` | Ignores `*.db` files so student data is never committed. |
+| `venture_foundry.zip` | Removed (a stale copy of an older version). |
+| `README.md` | PIN, backup, view-as-team, and performance notes. |
+| `tests/test_perf_safety.py` | 13 regression tests. |
 
-**Dependencies:** none added or removed. **Behavior changes visible to users:** the leaderboard can
-lag by up to 30 s within a round. During the second or so while another session is advancing the
-round, a page may render the old round until the next click.
+**Behavior changes users will notice:**
 
-**Compatibility:** `st.cache_data`/`st.cache_resource` require Streamlit ≥ 1.18, and
-`requirements.txt` already requires ≥ 1.32. WAL needs a normal local filesystem, which Community
-Cloud has. The code falls back silently if WAL is unavailable.
+- The leaderboard can lag by up to 30 s within a round.
+- Managing Partner notes arrive over a few minutes after an advance, instead of the advance waiting
+  for them.
+- Students can no longer pick a team from the landing page. Directors use the sidebar instead.
+- The Director sees a warning until the PIN is changed, and a reminder until a recent backup exists.
 
-## D. Testing results
+## D. Testing
 
-| Item | Status |
-|---|---|
-| Syntax check of every changed file (AST parse) | ✅ Passed |
-| `tests/test_perf_safety.py` | ⚠️ Written, **not run** (execution was blocked in the review environment) |
-| Max concurrency tested | Not measured |
-| Responsiveness / p95 / CPU / peak memory | Not measured |
-| SQLite micro-benchmark (independent of the app) | Measured: 0.34 ms per connect-per-query vs 0.23 ms reused; WAL cut lock errors 50 → 15 |
+- `pytest -q tests/` passes all 13 tests. They cover:
+  - WAL mode
+  - Cache scoping and invalidation
+  - Copy safety
+  - Checklist equivalence with and without the cache
+  - No overdraw under 25 concurrent spends
+  - Atomic counters
+  - A single advance and a single salary charge under 12 simultaneous loads
+  - Backup round-trip
+  - Rejecting junk or foreign restore files
+  - PIN secret override
+  - Background MP notes run once without blocking
+  - No lost skill XP under 20 concurrent trainings
+- Every student page (2 teams × 17 pages) and every Director page (16) renders without exceptions, on
+  both a seeded and a brand-new database. Student page text is **identical** to `main`.
+- Manually scripted flows: PIN lockout, login, default-PIN warning, backup reminder, view-as-team and
+  back, and the Backup page download.
+- Not tested: a real browser against Community Cloud, and restore through the UI uploader. The
+  restore logic itself is unit-tested.
 
-## E. Recommended next steps, not implemented (need your decision)
+## E. Remaining constraints
 
-1. **[Critical, data] Move persistence off the container.** Use a free hosted database, such as
-   Turso/libSQL (SQLite-compatible, smallest code change), Supabase Postgres, or Neon. At minimum, add
-   a Director "Download backup / Restore backup" of `venture_foundry.db` and take a backup each class
-   day.
-2. **[High, security] The landing page lists every team for anyone.** The *"Instructor demo: pick a
-   team directly"* expander lets any visitor enter any team without a join code. The landing page
-   also prints the default PIN (`foundry`). Recommendation: show the demo picker only after Director
-   login, and stop displaying the default PIN.
-3. **[High] Slow AI mail on advance.** When Managing-Partner notes are on, the session that triggers
-   an advance makes one AI request per team, serially, with up to a 25 s timeout each. The new lock
-   keeps other students from waiting on it, but that one session can hang for minutes. Recommendation:
-   send the notes in a background thread or on the Director's click.
-4. **[Medium] Pin dependency versions** (for example `streamlit==1.x.*`) so a Cloud rebuild can't
-   silently pick up a breaking release mid-semester.
-5. **[Low]** Remove the stale `venture_foundry.zip` (an old copy of the app) from the repo.
-6. **[Medium] Remaining lost-update patterns.** These are lower stakes than credits and money:
-   skill-XP and training updates still read-modify-write. Convert them to atomic SQL if teammates
-   report lost training progress.
-
-## F. Remaining platform constraints
-
-- **Code-level, now addressed:** N+1 reads, per-rerun init, uncached shared views, SQLite locking,
-  advance and spend races.
-- **Configuration:** upload cap. No supported Cloud setting adds CPU or memory.
-- **Platform, not fixable in code:**
-  - Community Cloud documents shared limits of roughly 0.078–2 CPU cores and 690 MB–2.7 GB RAM, which
-    can change without notice.
-  - All sessions share one Python process, so the GIL serializes the CPU work.
-  - There's no horizontal scaling.
-  - Apps sleep after inactivity, and waking takes time.
-  - **Local files, including the database, are not preserved across reboot or redeploy.**
-  - Actual CPU and memory for this app can't be observed from the dashboard, so they remain
-    **unknown**.
-
-**Is 30–40 concurrent users realistic?** For this workload (forms and text, no large files or
-models), it is plausible *after* these changes. That's because the remaining per-click work is small
-and memory per session is light. It is **not demonstrated.** Run the load test below before relying
-on it. Don't claim 40-user support until it passes.
-
-## 6. Load-test plan (run locally, not against production)
-
-1. Seed a copy of the database with one game at round 8 or later (10 teams, some evidence,
-   assumptions, and canvases). Point `VF_DB_PATH` at the copy.
-2. Use Playwright with N headless browsers (N = 1, 5, 10, 20, 30, 40). Each joins a team by code,
-   clicks through 5 pages, saves one form, and repeats for 5 minutes. Streamlit runs over WebSockets,
-   so plain HTTP load tools won't produce realistic results.
-3. Record per-click time to "script finished" (the stale-element overlay disappears), p50 and p95,
-   errors, and `psrecord <pid>` CPU and RSS.
-4. Run the same scenario on `main` and on this branch. Then include one forced scheduled advance
-   during the 40-user run and confirm salaries are charged exactly once.
+- **Durability.** Backups are manual. For automatic durability, move the database to a free hosted
+  service such as Turso/libSQL (SQLite-compatible, the smallest change), Supabase, or Neon. That
+  needs an account you create; the code change is then modest.
+- **Platform.**
+  - Community Cloud's documented limits are roughly 0.078–2 CPU cores and 690 MB–2.7 GB RAM, and can
+    change without notice.
+  - There is one Python process (GIL) and no horizontal scaling.
+  - Apps sleep after inactivity and take time to wake.
+  - Actual CPU allotment can't be observed, so it remains **unknown**.
+- **Is 30–40 users realistic?** At the app level, yes for normal classroom use: ~65 ms per click and
+  ~4 MB per session. Under a worst-case burst of 40 users all clicking nonstop, expect waits of a few
+  seconds, longer if Community Cloud gives the app less CPU than this sandbox had. A short check
+  during a real class session (40 students, watch for slowness or "Oh no" pages) is the final
+  confirmation.

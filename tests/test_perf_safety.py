@@ -153,3 +153,91 @@ def test_simultaneous_loads_advance_round_once(fresh_db):
     assert db.current_round() == 2
     # Exactly one round's salary charged, not one per simultaneous session.
     assert db.get_team(tid)["capital"] == start_capital - 100
+
+
+# ---- backup & restore ------------------------------------------------------- #
+def test_backup_roundtrip_restores_everything():
+    tid = _team(credits=7)
+    db.set_setting("marker", "before")
+    blob = db.backup_bytes()
+    ok, _, summ = db.validate_backup(blob)
+    assert ok and summ["teams"] == 1
+    db.delete_team(tid)
+    db.set_setting("marker", "after")
+    assert db.get_team(tid) is None
+    ok, msg = db.restore_from_bytes(blob)
+    assert ok, msg
+    assert db.get_team(tid)["evidence_credits"] == 7
+    assert db.get_setting("marker") == "before"
+
+
+def test_restore_rejects_junk_and_foreign_dbs(tmp_path):
+    assert not db.validate_backup(b"not a database")[0]
+    other = tmp_path / "other.db"
+    import sqlite3
+    c = sqlite3.connect(other)
+    c.execute("create table x(a)")
+    c.commit()
+    c.close()
+    ok, msg, _ = db.validate_backup(other.read_bytes())
+    assert not ok and "missing" in msg
+    n_before = len(db.list_games())
+    assert not db.restore_from_bytes(b"junk")[0]
+    assert len(db.list_games()) == n_before
+
+
+# ---- PIN ------------------------------------------------------------------- #
+def test_pin_secret_overrides_db(monkeypatch):
+    assert logic.pin_is_default() and logic.check_pin("foundry")
+    db.set_setting("instructor_pin", "s3cret!")
+    assert logic.check_pin("s3cret!") and not logic.check_pin("foundry")
+    monkeypatch.setenv("VF_INSTRUCTOR_PIN", "from-secrets")
+    assert logic.check_pin("from-secrets") and not logic.check_pin("s3cret!")
+    assert not logic.check_pin("") and not logic.check_pin(None)
+
+
+# ---- background Managing Partner notes ------------------------------------- #
+def test_mp_notes_run_in_background_once(fresh_db, monkeypatch):
+    import time
+    gid = fresh_db
+    ids = [_team() for _ in range(3)]
+    calls = []
+
+    def slow_note(tid, rnd):
+        time.sleep(0.2)
+        calls.append(tid)
+        return {"subject": "s", "body": "b"}
+
+    monkeypatch.setattr(logic, "send_managing_partner_note", slow_note)
+    t0 = time.perf_counter()
+    assert logic.send_managing_partner_notes_async(ids, 1, gid) == 3
+    assert time.perf_counter() - t0 < 0.15          # caller doesn't wait
+    assert logic.send_managing_partner_notes_async(ids, 1, gid) == 0   # no duplicate job
+    for _ in range(50):
+        if logic.mp_job_status(gid, 1).startswith("done"):
+            break
+        time.sleep(0.05)
+    assert logic.mp_job_status(gid, 1) == "done 3/3"
+    assert sorted(calls) == sorted(ids)
+
+
+# ---- skill progress -------------------------------------------------------- #
+def test_concurrent_skill_progress_is_not_lost():
+    tid = _team()
+    key = next(iter(db.get_team_skills(tid)))
+    lvl0, xp0, _ = logic.skill_progress(tid, key)
+
+    threads = [threading.Thread(target=logic.add_skill_progress, args=(tid, key, 1))
+               for _ in range(20)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    lvl, xp, _ = logic.skill_progress(tid, key)
+    # Total banked effort is conserved: replay 20 hours serially from the start.
+    exp_lvl, exp_xp = lvl0, xp0 + 20
+    import content
+    while exp_lvl < content.SKILL_MAX and exp_xp >= logic.cost_to_next(exp_lvl):
+        exp_xp -= logic.cost_to_next(exp_lvl)
+        exp_lvl += 1
+    if exp_lvl >= content.SKILL_MAX:
+        exp_xp = 0
+    assert (lvl, xp) == (exp_lvl, exp_xp)

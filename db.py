@@ -2084,3 +2084,91 @@ def get_venture_name(team_id):
                 "scores": _loads(row["venture_name_scores"]) if row["venture_name_scores"] else {}}
     finally:
         conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# Backup & restore
+#   Streamlit Community Cloud does not keep local files across a reboot or
+#   redeploy, so the Director needs a way to take the whole game home and put it
+#   back. Both directions use SQLite's online backup API, which produces a
+#   consistent copy even while students are writing (WAL mode).
+# --------------------------------------------------------------------------- #
+_REQUIRED_TABLES = {"settings", "games", "teams"}
+
+
+def backup_bytes():
+    """A consistent snapshot of the whole database as bytes (a .db file)."""
+    import tempfile
+    fd, tmp = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    try:
+        src = get_conn()
+        dst = sqlite3.connect(tmp)
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+            src.close()
+        with open(tmp, "rb") as fh:
+            return fh.read()
+    finally:
+        os.remove(tmp)
+
+
+def validate_backup(data):
+    """(ok, message, summary) for an uploaded backup file — never touches the live DB."""
+    import tempfile
+    if not data or not data.startswith(b"SQLite format 3\x00"):
+        return False, "That isn't a SQLite database file.", None
+    fd, tmp = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    try:
+        with open(tmp, "wb") as fh:
+            fh.write(data)
+        conn = sqlite3.connect(tmp)
+        conn.row_factory = sqlite3.Row
+        try:
+            if conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                return False, "The file is damaged (integrity check failed).", None
+            tables = {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            missing = _REQUIRED_TABLES - tables
+            if missing:
+                return False, ("This doesn't look like a Venture Foundry backup "
+                               f"(missing: {', '.join(sorted(missing))})."), None
+            summary = {
+                "games": conn.execute("SELECT COUNT(*) FROM games").fetchone()[0],
+                "teams": conn.execute("SELECT COUNT(*) FROM teams").fetchone()[0],
+            }
+            return True, "Looks good.", summary
+        finally:
+            conn.close()
+    except sqlite3.DatabaseError as exc:
+        return False, f"Couldn't read that file: {exc}", None
+    finally:
+        os.remove(tmp)
+
+
+def restore_from_bytes(data):
+    """Replace ALL live data with a validated backup. Returns (ok, message)."""
+    import tempfile
+    ok, msg, _ = validate_backup(data)
+    if not ok:
+        return False, msg
+    fd, tmp = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    try:
+        with open(tmp, "wb") as fh:
+            fh.write(data)
+        src = sqlite3.connect(tmp)
+        dst = get_conn()
+        try:
+            src.backup(dst)          # page-by-page copy into the live database
+        finally:
+            src.close()
+            dst.close()
+    finally:
+        os.remove(tmp)
+    invalidate_run_cache()
+    init_db()                         # apply any schema migrations to older backups
+    return True, "Restored."
